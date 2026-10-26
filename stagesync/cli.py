@@ -1,0 +1,480 @@
+"""StageSync Rich Command-Line Interface.
+
+Provides CLI commands for:
+  - scan: Discover videos from Google Photos or local directory
+  - process: Run intelligence pipeline on cataloged candidates
+  - review: Interactive TUI review queue for approving/editing live videos
+  - upload: Chunked resumable YouTube publication
+  - status: System health, database records, and quota telemetry
+  - auth: Manage Google Photos and YouTube OAuth tokens
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+from typing import List, Optional
+
+from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import BarColumn, DownloadColumn, Progress, TextColumn, TimeRemainingColumn, TransferSpeedColumn
+from rich.prompt import Confirm, Prompt
+from rich.table import Table
+from rich.text import Text
+
+from stagesync.config import get_settings
+from stagesync.database.connection import Database, get_db
+from stagesync.database.models import PrivacyStatus, VideoStatus
+from stagesync.ingestion.google_photos import GooglePhotosClient
+from stagesync.pipeline import PipelineCoordinator
+from stagesync.publisher.youtube_auth import YouTubeAuth
+
+console = Console()
+
+
+def format_duration(seconds: Optional[float]) -> str:
+    """Format duration in MM:SS or HH:MM:SS."""
+    if not seconds:
+        return "00:00"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def format_file_size(size_bytes: Optional[int]) -> str:
+    """Format byte size into human readable string."""
+    if not size_bytes:
+        return "0 B"
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f} PB"
+
+
+def cmd_status(args: argparse.Namespace) -> None:
+    """Display system status, database statistics, quotas, and credentials."""
+    settings = get_settings()
+    db = get_db()
+    photos_client = GooglePhotosClient()
+    yt_auth = YouTubeAuth()
+
+    console.print()
+    console.print(
+        Panel(
+            "[bold cyan]StageSync (ConcertVault) - System & Pipeline Status[/bold cyan]",
+            border_style="cyan",
+            box=box.ROUNDED,
+        )
+    )
+
+    # 1. Database Statistics Table
+    db_table = Table(title="Database Inventory", box=box.SIMPLE_HEAVY)
+    db_table.add_column("Status Category", style="cyan", no_wrap=True)
+    db_table.add_column("Count", justify="right", style="bold green")
+
+    all_videos = db.list_videos(limit=1000)
+    status_counts = {}
+    for v in all_videos:
+        st = v.processing_status.value
+        status_counts[st] = status_counts.get(st, 0) + 1
+
+    db_table.add_row("Total Cataloged Videos", str(len(all_videos)))
+    for st_enum in VideoStatus:
+        cnt = status_counts.get(st_enum.value, 0)
+        db_table.add_row(f"  • {st_enum.value}", str(cnt))
+
+    console.print(db_table)
+    console.print()
+
+    # 2. Integration & Quota Table
+    quota_table = Table(title="Integrations & Quota Status", box=box.SIMPLE_HEAVY)
+    quota_table.add_column("Service", style="yellow")
+    quota_table.add_column("Auth Status", style="bold")
+    quota_table.add_column("Quota / Limits", style="white")
+
+    # Google Photos
+    gp_auth = "[green]Authenticated[/green]" if photos_client.is_authenticated() else "[red]Not Configured[/red]"
+    quota_table.add_row("Google Photos Library API", gp_auth, "10,000 read requests / day")
+
+    # YouTube Data API
+    yt_status = "[green]Authenticated[/green]" if yt_auth.is_authenticated() else "[red]Not Configured[/red]"
+    uploads_today = db.get_todays_upload_count()
+    quota_table.add_row(
+        "YouTube Data API v3",
+        yt_status,
+        f"{uploads_today}/{settings.max_daily_uploads} videos uploaded today (Safety guardrail)",
+    )
+
+    # Setlist.fm
+    sfm_status = "[green]API Key Configured[/green]" if settings.setlist_fm_api_key else "[yellow]Missing Key[/yellow]"
+    quota_table.add_row("Setlist.fm API v2", sfm_status, "2 requests / second limit (Token bucket active)")
+
+    # Gemini Flash Audio
+    gem_status = "[green]API Key Configured[/green]" if settings.gemini_api_key else "[yellow]Missing Key[/yellow]"
+    quota_table.add_row("Gemini 2.5 Flash Audio", gem_status, "Setlist-constrained live reasoning")
+
+    console.print(quota_table)
+    console.print()
+
+
+def cmd_scan(args: argparse.Namespace) -> None:
+    """Discover videos from Google Photos or local directory."""
+    coordinator = PipelineCoordinator()
+
+    if args.dir:
+        dir_path = Path(args.dir)
+        console.print(f"[bold cyan]Scanning local directory:[/bold cyan] {dir_path}")
+        with console.status("[bold green]Ingesting local media files..."):
+            videos = coordinator.scan_local_directory(dir_path)
+        console.print(f"[bold green]Discovered {len(videos)} video files.[/bold green]")
+        return
+
+    # Google Photos Scan
+    console.print(f"[bold cyan]Scanning Google Photos (Past {args.days} days)...[/bold cyan]")
+    if args.dry_run:
+        console.print("[yellow]Running in DRY-RUN mode. Videos will be cataloged without downloading binaries.[/yellow]")
+
+    with console.status("[bold green]Querying Google Photos Library API..."):
+        videos = coordinator.scan_google_photos(
+            days=args.days,
+            album_id=args.album,
+            dry_run=args.dry_run,
+            limit=args.limit,
+        )
+
+    if not videos:
+        console.print("[yellow]No new videos found for the specified criteria.[/yellow]")
+        return
+
+    table = Table(title=f"Scan Results ({len(videos)} candidates)", box=box.ROUNDED)
+    table.add_column("ID", style="dim", max_width=12)
+    table.add_column("Filename", style="cyan")
+    table.add_column("Dimensions", justify="center")
+    table.add_column("Status", style="bold green")
+
+    for v in videos:
+        dim = f"{v.width}x{v.height}" if v.width and v.height else "N/A"
+        table.add_row(v.id[:8] + "...", v.filename, dim, v.processing_status.value)
+
+    console.print(table)
+
+
+def cmd_process(args: argparse.Namespace) -> None:
+    """Run intelligence pipeline on newly cataloged video assets."""
+    coordinator = PipelineCoordinator()
+    console.print(f"[bold cyan]Processing pending videos (Limit: {args.limit})...[/bold cyan]")
+
+    with console.status("[bold green]Running metadata extraction & concert intelligence..."):
+        processed = coordinator.process_pending_videos(limit=args.limit)
+
+    if not processed:
+        console.print("[yellow]No pending videos found to process.[/yellow]")
+        return
+
+    table = Table(title=f"Processed Candidates ({len(processed)})", box=box.ROUNDED)
+    table.add_column("Filename", style="cyan")
+    table.add_column("Duration", justify="center")
+    table.add_column("Location", style="yellow")
+    table.add_column("Candidate Score", justify="right")
+    table.add_column("Final Status", style="bold")
+
+    for v in processed:
+        loc = f"{v.latitude:.2f}, {v.longitude:.2f}" if v.latitude and v.longitude else "No GPS"
+        dur = format_duration(v.duration_seconds)
+        st_style = "green" if v.processing_status == VideoStatus.APPROVED else ("yellow" if v.processing_status == VideoStatus.PENDING_REVIEW else "red")
+        table.add_row(
+            v.filename,
+            dur,
+            loc,
+            f"{v.concert_confidence_score:.2f}",
+            f"[{st_style}]{v.processing_status.value}[/{st_style}]",
+        )
+
+    console.print(table)
+
+
+def cmd_review(args: argparse.Namespace) -> None:
+    """Interactive TUI Review Queue."""
+    db = get_db()
+    coordinator = PipelineCoordinator()
+    queue = db.get_review_queue()
+
+    if not queue:
+        console.print("[bold green]Review queue is empty! No videos pending review.[/bold green]")
+        return
+
+    console.print(f"[bold cyan]Found {len(queue)} candidate video(s) pending review.[/bold cyan]\n")
+
+    # Non-interactive mode fallback
+    if getattr(args, "non_interactive", False) or not sys.stdin.isatty():
+        table = Table(title="Pending Review Queue", box=box.ROUNDED)
+        table.add_column("Video ID", style="dim")
+        table.add_column("Filename", style="cyan")
+        table.add_column("Artist", style="yellow")
+        table.add_column("Song", style="bold green")
+        table.add_column("Confidence", justify="right")
+
+        for vid, ident, concert, venue in queue:
+            artist = (ident.detected_artist if ident else (concert.headliner_artist if concert else "Unknown"))
+            song = (ident.detected_song_title if ident else "Live Performance")
+            conf = f"{ident.match_confidence * 100:.1f}%" if ident else "0.0%"
+            table.add_row(vid.id[:8], vid.filename, artist, song, conf)
+
+        console.print(table)
+        return
+
+    # Interactive Review TUI
+    for idx, (vid, ident, concert, venue) in enumerate(queue):
+        console.clear()
+        console.print("=" * 80)
+        console.print(f"[bold cyan]StageSync Review [Candidate {idx + 1} of {len(queue)}][/bold cyan]")
+        console.print("=" * 80)
+
+        # File & Temporal Details
+        file_info = f"{vid.filename} (Duration: {format_duration(vid.duration_seconds)} | Size: {format_file_size(vid.file_size_bytes)})"
+        rec_time = vid.recorded_at_local or vid.recorded_at_utc or "Unknown Time"
+        loc_str = "Unknown Location"
+        if venue:
+            loc_str = f"{venue.name} ({venue.city}, {venue.state_province or venue.country_code})"
+            if vid.latitude and vid.longitude:
+                loc_str += f"\n              [{vid.latitude:.4f}° N, {vid.longitude:.4f}° W]"
+        elif vid.latitude and vid.longitude:
+            loc_str = f"[{vid.latitude:.4f}° N, {vid.longitude:.4f}° W]"
+
+        console.print(f"File:         [bold white]{file_info}[/bold white]")
+        console.print(f"Recorded At:  [bold white]{rec_time}[/bold white]")
+        console.print(f"Location:     [bold yellow]{loc_str}[/bold yellow]\n")
+
+        # Matched Show
+        if concert:
+            console.print("[bold green]MATCHED SHOW:[/bold green]")
+            console.print(f"  Artist:     [bold]{concert.headliner_artist}[/bold]")
+            if concert.tour_name:
+                console.print(f"  Tour:       {concert.tour_name}")
+            if concert.lineup_artists:
+                console.print(f"  Lineup:     {', '.join(concert.lineup_artists)}")
+            if concert.source_url:
+                console.print(f"  Setlist.fm: [link={concert.source_url}]{concert.source_url}[/link]")
+            console.print()
+        else:
+            console.print("[yellow]MATCHED SHOW: None correlated[/yellow]\n")
+
+        # Identified Track
+        if ident:
+            console.print("[bold green]IDENTIFIED TRACK:[/bold green]")
+            tr_num = f" (Track #{ident.track_number_in_setlist})" if ident.track_number_in_setlist else ""
+            console.print(f"  Song:       [bold]{ident.detected_song_title}{tr_num}[/bold]")
+            console.print(f"  Service:    {ident.fingerprint_service} (Confidence: {ident.match_confidence * 100:.1f}%)")
+            v_text = "Verified against Setlist.fm roster" if ident.setlist_verified else "Acoustic match only"
+            console.print(f"  Setlist:    {v_text}")
+            if ident.identified_lyrics_snippet:
+                console.print(f"  Lyrics:     \"{ident.identified_lyrics_snippet}\"")
+            console.print()
+        else:
+            console.print("[yellow]IDENTIFIED TRACK: None[/yellow]\n")
+
+        # YouTube Draft Metadata
+        upload_job = db.get_youtube_upload_by_video_id(vid.id)
+        if upload_job:
+            console.print("[bold green]TARGET YOUTUBE METADATA:[/bold green]")
+            console.print(f"  Title:      [bold cyan]{upload_job.title}[/bold cyan]")
+            console.print(f"  Privacy:    [bold magenta]{upload_job.privacy_status.value}[/bold magenta]")
+        console.print("-" * 80)
+
+        # Action Prompt
+        console.print("[bold white][A][/bold white] Approve & Queue Upload   [bold white][E][/bold white] Edit Metadata   [bold white][P][/bold white] Change Privacy   [bold white][R][/bold white] Reject   [bold white][S][/bold white] Skip")
+        choice = Prompt.ask("Selection", choices=["a", "e", "p", "r", "s", "A", "E", "P", "R", "S"], default="a").lower()
+
+        if choice == "a":
+            coordinator.approve_video(vid.id)
+            console.print("[bold green]✓ Approved for upload.[/bold green]\n")
+        elif choice == "e":
+            new_title = Prompt.ask("Override Song Title", default=ident.detected_song_title if ident else "")
+            new_artist = Prompt.ask("Override Artist", default=ident.detected_artist if ident else (concert.headliner_artist if concert else ""))
+            coordinator.approve_video(vid.id, song_title_override=new_title, artist_override=new_artist)
+            console.print("[bold green]✓ Updated & Approved.[/bold green]\n")
+        elif choice == "p":
+            new_priv = Prompt.ask("Select Privacy", choices=["private", "unlisted", "public"], default="unlisted")
+            coordinator.approve_video(vid.id, privacy_override=PrivacyStatus(new_priv))
+            console.print(f"[bold green]✓ Privacy set to {new_priv} & Approved.[/bold green]\n")
+        elif choice == "r":
+            coordinator.reject_video(vid.id)
+            console.print("[bold red]✗ Rejected candidate.[/bold red]\n")
+        elif choice == "s":
+            console.print("[yellow]Skipped to next candidate.[/yellow]\n")
+
+
+def cmd_upload(args: argparse.Namespace) -> None:
+    """Upload approved videos using chunked resumable upload."""
+    coordinator = PipelineCoordinator()
+    db = get_db()
+    approved = db.list_videos(status=VideoStatus.APPROVED, limit=args.limit or 10)
+
+    if not approved:
+        console.print("[bold yellow]No approved videos pending upload.[/bold yellow]")
+        return
+
+    console.print(f"[bold cyan]Found {len(approved)} approved video(s) to upload.[/bold cyan]")
+
+    privacy_override = PrivacyStatus(args.privacy) if args.privacy else None
+
+    with Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        DownloadColumn(),
+        TransferSpeedColumn(),
+        TimeRemainingColumn(),
+    ) as progress:
+        task_id = progress.add_task("Uploading", total=100)
+
+        def on_progress(bytes_sent: int, total_bytes: int):
+            progress.update(task_id, completed=bytes_sent, total=total_bytes)
+
+        results = coordinator.upload_approved_videos(
+            limit=args.limit,
+            privacy_override=privacy_override,
+            progress_callback=on_progress,
+        )
+
+    for r in results:
+        if r.success:
+            console.print(f"[bold green]✓ Uploaded successfully:[/bold green] [link={r.youtube_url}]{r.youtube_url}[/link]")
+        else:
+            console.print(f"[bold red]✗ Upload failed:[/bold red] {r.error_message}")
+
+
+def cmd_auth(args: argparse.Namespace) -> None:
+    """Manage OAuth authentication flows."""
+    target = args.service
+
+    if target == "google-photos":
+        client = GooglePhotosClient()
+        if client.is_authenticated():
+            console.print("[green]Google Photos is already authenticated.[/green]")
+            return
+        redirect_uri = client.google_photos_redirect_uri if hasattr(client, 'google_photos_redirect_uri') else "http://localhost:8090/callback"
+        url = client.get_authorization_url(redirect_uri)
+        console.print("\n[bold cyan]Google Photos Authorization:[/bold cyan]")
+        console.print(f"Open this URL in your browser:\n[link={url}]{url}[/link]\n")
+        code = Prompt.ask("Paste the authorization code received")
+        client.exchange_code(code.strip(), redirect_uri)
+        console.print("[bold green]✓ Google Photos token successfully saved![/bold green]")
+
+    elif target == "youtube":
+        yt = YouTubeAuth()
+        if yt.is_authenticated():
+            console.print("[green]YouTube is already authenticated.[/green]")
+            return
+        redirect_uri = "http://localhost:8090/youtube_callback"
+        url = yt.get_authorization_url(redirect_uri)
+        console.print("\n[bold cyan]YouTube Authorization:[/bold cyan]")
+        console.print(f"Open this URL in your browser:\n[link={url}]{url}[/link]\n")
+        code = Prompt.ask("Paste the authorization code received")
+        yt.exchange_code(code.strip(), redirect_uri)
+        console.print("[bold green]✓ YouTube token successfully saved![/bold green]")
+
+    elif target == "status":
+        cmd_status(args)
+
+
+def cmd_daemon(args: argparse.Namespace) -> None:
+    """Run continuous background watcher daemon."""
+    from stagesync.daemon import StageSyncDaemon
+
+    console.print(
+        Panel(
+            f"[bold cyan]StageSync Daemon[/bold cyan]\nInterval: {args.interval}m | Auto-Process: {not args.no_process} | Auto-Upload: {args.auto_upload}",
+            border_style="cyan",
+            box=box.ROUNDED,
+        )
+    )
+    daemon = StageSyncDaemon(
+        interval_minutes=args.interval,
+        auto_process=not args.no_process,
+        auto_upload=args.auto_upload,
+    )
+    daemon.start(run_once=args.run_once)
+
+
+def cmd_serve(args: argparse.Namespace) -> None:
+    """Run local Web Dashboard."""
+    from stagesync.web.server import run_server
+
+    console.print(
+        Panel(
+            f"[bold cyan]StageSync Web Dashboard[/bold cyan]\nListening on http://{args.host}:{args.port}",
+            border_style="blue",
+            box=box.ROUNDED,
+        )
+    )
+    run_server(host=args.host, port=args.port, open_browser=args.open_browser)
+
+
+def main() -> None:
+    """Main CLI entrypoint."""
+    parser = argparse.ArgumentParser(
+        prog="stagesync",
+        description="StageSync: Autonomous Live Concert Video Archival & YouTube Pipeline",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # status
+    p_status = subparsers.add_parser("status", help="Show system status and quotas")
+    p_status.set_defaults(func=cmd_status)
+
+    # daemon
+    p_daemon = subparsers.add_parser("daemon", help="Run background watcher daemon")
+    p_daemon.add_argument("--interval", type=int, default=60, help="Check interval in minutes (default: 60)")
+    p_daemon.add_argument("--no-process", action="store_true", help="Only scan without running AI intelligence")
+    p_daemon.add_argument("--auto-upload", action="store_true", help="Automatically upload approved videos")
+    p_daemon.add_argument("--run-once", action="store_true", help="Execute single cycle and exit")
+    p_daemon.set_defaults(func=cmd_daemon)
+
+    # serve / ui
+    p_serve = subparsers.add_parser("serve", help="Launch local Web Dashboard")
+    p_serve.add_argument("--host", type=str, default="127.0.0.1", help="Host interface (default: 127.0.0.1)")
+    p_serve.add_argument("--port", type=int, default=8765, help="HTTP port (default: 8765)")
+    p_serve.add_argument("--open-browser", action="store_true", help="Automatically open browser")
+    p_serve.set_defaults(func=cmd_serve)
+
+    # scan
+    p_scan = subparsers.add_parser("scan", help="Scan Google Photos or local directory")
+    p_scan.add_argument("--days", type=int, default=30, help="Days back to scan in Google Photos")
+    p_scan.add_argument("--album", type=str, default=None, help="Album ID filter")
+    p_scan.add_argument("--dir", type=str, default=None, help="Local directory path to scan")
+    p_scan.add_argument("--limit", type=int, default=50, help="Maximum items to scan")
+    p_scan.add_argument("--dry-run", action="store_true", help="Catalog candidates without downloading")
+    p_scan.set_defaults(func=cmd_scan)
+
+    # process
+    p_process = subparsers.add_parser("process", help="Process discovered videos through intelligence pipeline")
+    p_process.add_argument("--limit", type=int, default=50, help="Max candidates to process")
+    p_process.set_defaults(func=cmd_process)
+
+    # review
+    p_review = subparsers.add_parser("review", help="Interactive TUI review queue")
+    p_review.add_argument("--non-interactive", action="store_true", help="Print table without interactive prompt")
+    p_review.set_defaults(func=cmd_review)
+
+    # upload
+    p_upload = subparsers.add_parser("upload", help="Upload approved videos to YouTube")
+    p_upload.add_argument("--limit", type=int, default=5, help="Number of videos to upload")
+    p_upload.add_argument("--privacy", choices=["private", "unlisted", "public"], help="Override privacy level")
+    p_upload.set_defaults(func=cmd_upload)
+
+    # auth
+    p_auth = subparsers.add_parser("auth", help="OAuth authentication management")
+    p_auth.add_argument("service", choices=["google-photos", "youtube", "status"], help="Target authentication service")
+    p_auth.set_defaults(func=cmd_auth)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
