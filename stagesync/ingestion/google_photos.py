@@ -151,8 +151,8 @@ class GooglePhotosClient:
         self._save_token_data(token_data)
         return token_data
 
-    def get_access_token(self) -> str:
-        """Obtain a valid access token, refreshing if necessary."""
+    def get_access_token(self, force_refresh: bool = False) -> str:
+        """Obtain a valid access token, refreshing if necessary or forced."""
         token_data = self._load_token_data()
         if not token_data:
             raise PermissionError("Google Photos is not authenticated. Run 'stagesync auth google-photos'.")
@@ -160,19 +160,47 @@ class GooglePhotosClient:
         access_token = token_data.get("access_token")
         refresh_token = token_data.get("refresh_token")
 
-        # In production, check expiry; if refresh_token exists, refresh when needed
-        if refresh_token and self.client_id and self.client_secret:
-            # Check if token might be expired
-            created_at_str = token_data.get("created_at")
-            expires_in = token_data.get("expires_in", 3600)
-            is_expired = False
-            if created_at_str:
-                created_at = datetime.datetime.fromisoformat(created_at_str)
-                age = (datetime.datetime.now(datetime.timezone.utc) - created_at).total_seconds()
-                if age > (expires_in - 300):
+        if refresh_token:
+            if not self.client_id or not self.client_secret:
+                self._load_credentials_from_file()
+
+            if self.client_id and self.client_secret:
+                is_expired = force_refresh
+                if not access_token:
                     is_expired = True
-            if is_expired:
-                access_token = self._refresh_token(refresh_token)
+                elif not force_refresh:
+                    # Check expires_at timestamp if present
+                    expires_at = token_data.get("expires_at")
+                    if expires_at is not None:
+                        try:
+                            now_ts = datetime.datetime.now(datetime.timezone.utc).timestamp()
+                            if now_ts > (float(expires_at) - 300):
+                                is_expired = True
+                        except (ValueError, TypeError):
+                            is_expired = True
+                    else:
+                        # Check created_at ISO string if present
+                        created_at_str = token_data.get("created_at")
+                        expires_in = token_data.get("expires_in", 3600)
+                        if created_at_str:
+                            try:
+                                created_at = datetime.datetime.fromisoformat(created_at_str)
+                                age = (datetime.datetime.now(datetime.timezone.utc) - created_at).total_seconds()
+                                if age > (expires_in - 300):
+                                    is_expired = True
+                            except (ValueError, TypeError):
+                                is_expired = True
+                        else:
+                            # Neither expires_at nor created_at is present; assume expired to be safe
+                            is_expired = True
+
+                if is_expired:
+                    try:
+                        access_token = self._refresh_token(refresh_token)
+                    except Exception as e:
+                        logger.warning("Failed to refresh Google Photos access token: %s", e)
+                        if not access_token:
+                            raise
 
         if not access_token:
             raise PermissionError("No valid access token available for Google Photos.")
@@ -180,6 +208,8 @@ class GooglePhotosClient:
 
     def _refresh_token(self, refresh_token: str) -> str:
         """Request new access token using refresh token."""
+        if not self.client_id or not self.client_secret:
+            self._load_credentials_from_file()
         data = {
             "client_id": self.client_id,
             "client_secret": self.client_secret,
@@ -189,8 +219,15 @@ class GooglePhotosClient:
         res = requests.post(GOOGLE_TOKEN_URL, data=data, timeout=15)
         res.raise_for_status()
         fresh = res.json()
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
         fresh["refresh_token"] = refresh_token
-        fresh["created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        fresh["created_at"] = now_dt.isoformat()
+        expires_in = fresh.get("expires_in", 3600)
+        fresh["expires_at"] = now_dt.timestamp() + expires_in
+        if self.client_id:
+            fresh["client_id"] = self.client_id
+        if self.client_secret:
+            fresh["client_secret"] = self.client_secret
         self._save_token_data(fresh)
         return fresh["access_token"]
 
@@ -260,6 +297,15 @@ class GooglePhotosClient:
             payload["filters"] = filters
 
         res = requests.post(url, headers=headers, json=payload, timeout=20)
+        if res.status_code == 401:
+            logger.info("Received 401 Unauthorized from Google Photos. Attempting token refresh...")
+            try:
+                access_token = self.get_access_token(force_refresh=True)
+                headers["Authorization"] = f"Bearer {access_token}"
+                res = requests.post(url, headers=headers, json=payload, timeout=20)
+            except Exception as e:
+                logger.warning("Token refresh retry failed: %s", e)
+
         res.raise_for_status()
         data = res.json()
 
@@ -284,7 +330,17 @@ class GooglePhotosClient:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         sha = hashlib.sha256()
 
-        with requests.get(download_url, headers=headers, stream=True, timeout=60) as resp:
+        resp = requests.get(download_url, headers=headers, stream=True, timeout=60)
+        if resp.status_code == 401:
+            logger.info("Received 401 downloading video. Attempting token refresh...")
+            try:
+                access_token = self.get_access_token(force_refresh=True)
+                headers["Authorization"] = f"Bearer {access_token}"
+                resp = requests.get(download_url, headers=headers, stream=True, timeout=60)
+            except Exception as e:
+                logger.warning("Token refresh retry failed during download: %s", e)
+
+        with resp:
             resp.raise_for_status()
             total_bytes = int(resp.headers.get("content-length", 0))
             downloaded = 0
