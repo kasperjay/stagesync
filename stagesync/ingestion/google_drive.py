@@ -489,6 +489,26 @@ class GoogleDriveClient:
         next_token = data.get("nextPageToken")
         return filtered_items, next_token
 
+    def get_file_metadata(
+        self,
+        file_id: str,
+        fields: str = "id, name, mimeType, parents, imageMediaMetadata, videoMediaMetadata, createdTime",
+    ) -> Dict[str, Any]:
+        """Fetch metadata for a specific Drive file."""
+        access_token = self.get_access_token()
+        headers = {"Authorization": f"Bearer {access_token}"}
+        url = f"{GOOGLE_DRIVE_API_BASE}/files/{file_id}"
+        params = {"fields": fields, "supportsAllDrives": "true"}
+
+        resp = requests.get(url, headers=headers, params=params, timeout=25)
+        if resp.status_code == 401:
+            access_token = self.get_access_token(force_refresh=True)
+            headers["Authorization"] = f"Bearer {access_token}"
+            resp = requests.get(url, headers=headers, params=params, timeout=25)
+
+        resp.raise_for_status()
+        return resp.json()
+
     def download_video(
         self,
         file_id: str,

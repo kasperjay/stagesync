@@ -41,6 +41,11 @@ from stagesync.intelligence.audio_extractor import AudioExtractor
 from stagesync.intelligence.geocoder import ReverseGeocoder
 from stagesync.intelligence.setlist_fm import MatchedConcert, SetlistFmClient
 from stagesync.intelligence.shazam_matcher import ShazamMatcher
+from stagesync.intelligence.spatial_correlator import (
+    CorrelatedLocation,
+    PhotoLocationSample,
+    SpatialTemporalCorrelator,
+)
 from stagesync.publisher.metadata_gen import MetadataGenerator
 from stagesync.publisher.resumable_upload import ResumableUploader, UploadResult
 from stagesync.security import sanitize_filename, validate_safe_path
@@ -70,6 +75,7 @@ class PipelineCoordinator:
         self.setlist_client = SetlistFmClient()
         self.shazam_matcher = ShazamMatcher()
         self.ai_audio_judge = AIAudioJudge()
+        self.spatial_correlator = SpatialTemporalCorrelator()
 
         # Publisher components
         self.metadata_gen = MetadataGenerator()
@@ -298,6 +304,16 @@ class PipelineCoordinator:
             if not all_items:
                 raise RuntimeError(f"Google Drive query failed: {e}") from e
 
+        # Fetch GPS photo samples from target Drive folder for neighbor correlation
+        drive_photo_samples: List[PhotoLocationSample] = []
+        if clean_folder:
+            try:
+                drive_photo_samples = self.spatial_correlator.index_drive_folder_photos(
+                    self.drive_client, clean_folder
+                )
+            except Exception as e:
+                logger.debug("Drive folder photo pre-indexing skipped: %s", e)
+
         for item in all_items:
             file_id = item.get("id")
             if not file_id:
@@ -337,6 +353,20 @@ class PipelineCoordinator:
                 lat = float(loc.get("latitude")) if loc.get("latitude") is not None else None
                 lng = float(loc.get("longitude")) if loc.get("longitude") is not None else None
 
+                # Correlate GPS from neighbor photos if video lacks coordinates
+                device_make = None
+                device_model = None
+                if (lat is None or lng is None) and drive_photo_samples:
+                    corr = self.spatial_correlator.correlate_video_location(
+                        video_recorded_at=item.get("createdTime"),
+                        photo_samples=drive_photo_samples,
+                    )
+                    if corr:
+                        lat = corr.latitude
+                        lng = corr.longitude
+                        device_make = corr.device_make
+                        device_model = corr.device_model
+
                 video = Video(
                     source_photo_id=source_id,
                     filename=clean_filename,
@@ -346,6 +376,8 @@ class PipelineCoordinator:
                     duration_seconds=duration_sec,
                     latitude=lat,
                     longitude=lng,
+                    device_make=device_make,
+                    device_model=device_model,
                     file_size_bytes=file_size,
                     recorded_at_utc=item.get("createdTime"),
                     processing_status=VideoStatus.DISCOVERED,
@@ -387,6 +419,9 @@ class PipelineCoordinator:
         if not target_dir.exists() or not target_dir.is_dir():
             raise NotADirectoryError(f"Directory not found: {target_dir}")
 
+        # Index still photos and sidecars in the folder for neighbor GPS correlation
+        local_photo_samples = self.spatial_correlator.scan_local_directory_for_photos(target_dir)
+
         video_extensions = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
         found_videos: List[Video] = []
 
@@ -414,6 +449,20 @@ class PipelineCoordinator:
                     v.longitude = parsed_meta.longitude
                     if parsed_meta.recorded_at_utc:
                         v.recorded_at_utc = parsed_meta.recorded_at_utc
+
+                # Correlate GPS from neighbor photos if video lacks coordinates
+                if (v.latitude is None or v.longitude is None) and local_photo_samples:
+                    corr = self.spatial_correlator.correlate_video_location(
+                        video_recorded_at=v.recorded_at_utc or v.recorded_at_local,
+                        photo_samples=local_photo_samples,
+                    )
+                    if corr:
+                        v.latitude = corr.latitude
+                        v.longitude = corr.longitude
+                        v.altitude_meters = corr.altitude_meters
+                        v.device_make = v.device_make or corr.device_make
+                        v.device_model = v.device_model or corr.device_model
+
                 saved = self.db.save_video(v)
                 found_videos.append(saved)
 
@@ -492,6 +541,66 @@ class PipelineCoordinator:
             video.concert_confidence_score = parsed_meta.concert_confidence_score
             video.processing_status = VideoStatus.ANALYZING_METADATA
             self.db.save_video(video)
+
+        # ---------------------------------------------------------------------
+        # Step 1.5: Spatial-Temporal Neighbor Correlation (for iPhone videos)
+        # ---------------------------------------------------------------------
+        if video.latitude is None or video.longitude is None:
+            def step_spatial_correlate():
+                photo_samples: List[PhotoLocationSample] = []
+                # 1. Check local directory where video resides
+                if file_path.parent.exists():
+                    photo_samples = self.spatial_correlator.scan_local_directory_for_photos(file_path.parent)
+
+                # 2. If video was imported from Google Drive, query the Drive folder
+                if not photo_samples and video.source_photo_id and video.source_photo_id.startswith("drive_"):
+                    drive_file_id = video.source_photo_id.replace("drive_", "")
+                    try:
+                        meta = self.drive_client.get_file_metadata(drive_file_id)
+                        parent_id = meta.get("parents", [None])[0] if meta else None
+                        if parent_id:
+                            photo_samples = self.spatial_correlator.index_drive_folder_photos(
+                                self.drive_client, parent_id
+                            )
+                    except Exception as e:
+                        logger.debug("Drive folder photo query failed for video %s: %s", video.id, e)
+
+                # 3. Correlate with closest neighbor photo
+                corr = self.spatial_correlator.correlate_video_location(
+                    video_recorded_at=video.recorded_at_utc or video.recorded_at_local,
+                    photo_samples=photo_samples,
+                )
+                if corr:
+                    video.latitude = corr.latitude
+                    video.longitude = corr.longitude
+                    video.altitude_meters = corr.altitude_meters
+                    if not video.device_make and corr.device_make:
+                        video.device_make = corr.device_make
+                    if not video.device_model and corr.device_model:
+                        video.device_model = corr.device_model
+
+                    # Re-score concert candidate probability with known location
+                    is_cand, score = self.metadata_parser.evaluate_concert_candidate(
+                        duration_s=video.duration_seconds or 0.0,
+                        recorded_at_local=video.recorded_at_local,
+                        has_audio=True,
+                        has_location=True,
+                    )
+                    video.is_concert_candidate = is_cand
+                    video.concert_confidence_score = score
+                    self.db.save_video(video)
+
+                    return StepStatus.SUCCESS, {
+                        "correlated_from": corr.source_reference,
+                        "time_delta_seconds": corr.time_delta_seconds,
+                        "latitude": corr.latitude,
+                        "longitude": corr.longitude,
+                        "device_model": corr.device_model,
+                    }, None
+
+                return StepStatus.SKIPPED, {"message": "No neighbor photo found with GPS"}, None
+
+            self._audit_step(video.id, PipelineStep.SPATIAL_CORRELATION, step_spatial_correlate)
 
         # ---------------------------------------------------------------------
         # Step 2: Reverse Geocoding (Nominatim)
