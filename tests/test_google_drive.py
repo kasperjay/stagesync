@@ -154,6 +154,7 @@ class TestGoogleDrive(unittest.TestCase):
 
         # Under min_size_bytes
         self.assertFalse(is_likely_video_file("corrupt.mp4", "video/mp4", 50))
+        self.assertFalse(is_likely_video_file("IMG_1058.MOV", "video/quicktime", 33645))  # Takeout still JPEG
 
         # Legitimate video candidates
         self.assertTrue(is_likely_video_file("PXL_20240815_redrocks.mp4", "video/mp4", 50_000_000))

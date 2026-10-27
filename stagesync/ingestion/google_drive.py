@@ -66,7 +66,7 @@ def is_likely_video_file(
     filename: str,
     mime_type: Optional[str] = None,
     size_bytes: Optional[int] = None,
-    min_size_bytes: int = 1000,
+    min_size_bytes: int = 150_000,
 ) -> bool:
     """Validate that a candidate is a genuine video file and not code or audio presets.
 
