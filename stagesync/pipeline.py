@@ -28,7 +28,11 @@ from stagesync.database.models import (
     VideoStatus,
     YouTubeUpload,
 )
-from stagesync.ingestion.google_drive import GoogleDriveClient, is_likely_video_file
+from stagesync.ingestion.google_drive import (
+    GoogleDriveClient,
+    extract_folder_id,
+    is_likely_video_file,
+)
 from stagesync.ingestion.google_photos import GooglePhotosClient
 from stagesync.ingestion.metadata_parser import MetadataParser, ParsedVideoMetadata
 from stagesync.intelligence.ai_audio_judge import AIAudioJudge
@@ -255,12 +259,13 @@ class PipelineCoordinator:
         limit: int = 50,
     ) -> List[Video]:
         """Scan Google Drive for video files matching date range and catalog discoveries."""
+        clean_folder = extract_folder_id(folder_id)
         logger.info(
             "Scanning Google Drive (start_date=%s, end_date=%s, days=%s, folder_id=%s, dry_run=%s)",
             start_date,
             end_date,
             days,
-            folder_id,
+            clean_folder,
             dry_run,
         )
         discovered_videos: List[Video] = []
@@ -270,7 +275,7 @@ class PipelineCoordinator:
                 start_date=start_date,
                 end_date=end_date,
                 days=days,
-                folder_id=folder_id,
+                folder_id=clean_folder,
                 page_size=limit,
             )
         except Exception as e:

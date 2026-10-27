@@ -64,14 +64,13 @@ def is_likely_video_file(
     filename: str,
     mime_type: Optional[str] = None,
     size_bytes: Optional[int] = None,
-    min_size_bytes: int = 100_000,
+    min_size_bytes: int = 1000,
 ) -> bool:
     """Validate that a candidate is a genuine video file and not code or audio presets.
 
     Google Drive frequently misclassifies TypeScript ES Module files (.mts / .d.mts)
     as video/mp2t (MPEG-2 Transport Stream) and DAW track preset files (.tfx)
-    as video/mp4v-es. In addition, real video recordings from concerts are almost
-    always > 1MB, never a few hundred bytes.
+    as video/mp4v-es.
     """
     if not filename:
         return False
@@ -79,13 +78,35 @@ def is_likely_video_file(
     lower_name = filename.lower().strip()
 
     # Reject known non-video compound extensions (e.g., index.d.mts)
-    for bad_ext in (".d.mts", ".tfx", ".tsx", ".jsx", ".mjs", ".cjs", ".json", ".xml", ".txt", ".md"):
+    for bad_ext in (
+        ".d.mts",
+        ".tfx",
+        ".tsx",
+        ".jsx",
+        ".ts",
+        ".js",
+        ".mjs",
+        ".cjs",
+        ".json",
+        ".xml",
+        ".txt",
+        ".md",
+        ".py",
+        ".css",
+        ".html",
+        ".zip",
+        ".tar",
+        ".gz",
+        ".pdf",
+        ".doc",
+        ".docx",
+    ):
         if lower_name.endswith(bad_ext):
             return False
 
     suffix = Path(lower_name).suffix
 
-    # If it has a standard video extension (.mp4, .mov, etc.)
+    # Standard video container extensions (ensure not corrupted tiny file)
     if suffix in VALID_VIDEO_EXTENSIONS:
         if size_bytes is not None and size_bytes < min_size_bytes:
             return False
@@ -96,15 +117,30 @@ def is_likely_video_file(
         lower_mime = mime_type.lower()
         if lower_mime.startswith("video/"):
             # Exclude known false-positive MIME types
-            if lower_mime in ("video/mp4v-es", "video/mp2t"):
+            if lower_mime in ("video/mp4v-es", "video/mp2t", "video/vnd.dlna.mpeg-tts"):
                 return False
             if suffix in DISALLOWED_EXTENSIONS:
-                return False
-            if size_bytes is not None and size_bytes < min_size_bytes:
                 return False
             return True
 
     return False
+
+
+def extract_folder_id(raw_id_or_url: Optional[str]) -> Optional[str]:
+    """Extract clean Google Drive folder ID from raw ID string or browser URL."""
+    if not raw_id_or_url:
+        return None
+    val = raw_id_or_url.strip()
+    if "drive.google.com" in val:
+        import re
+        m = re.search(r"folders/([a-zA-Z0-9_-]+)", val)
+        if m:
+            return m.group(1)
+        m = re.search(r"[?&]id=([a-zA-Z0-9_-]+)", val)
+        if m:
+            return m.group(1)
+    val = val.strip("/'\" ")
+    return val if val else None
 
 
 def _parse_date(date_val: Optional[Union[datetime.date, datetime.datetime, str]]) -> Optional[datetime.date]:
@@ -320,6 +356,41 @@ class GoogleDriveClient:
         self._save_token_data(fresh)
         return fresh["access_token"]
 
+    def get_subfolder_ids(self, parent_folder_id: str, max_depth: int = 2) -> List[str]:
+        """Fetch all subfolder IDs under parent folder up to max_depth."""
+        clean_parent = extract_folder_id(parent_folder_id)
+        if not clean_parent:
+            return []
+
+        all_folders: List[str] = []
+        queue = [clean_parent]
+        current_depth = 0
+
+        while queue and current_depth < max_depth:
+            current_depth += 1
+            next_queue = []
+            for pid in queue:
+                try:
+                    access_token = self.get_access_token()
+                    headers = {"Authorization": f"Bearer {access_token}"}
+                    params = {
+                        "q": f"mimeType = 'application/vnd.google-apps.folder' and '{pid}' in parents and trashed = false",
+                        "pageSize": 50,
+                        "fields": "files(id, name)",
+                        "supportsAllDrives": "true",
+                        "includeItemsFromAllDrives": "true",
+                    }
+                    res = requests.get(f"{GOOGLE_DRIVE_API_BASE}/files", headers=headers, params=params, timeout=15)
+                    if res.status_code == 200:
+                        child_ids = [f["id"] for f in res.json().get("files", []) if f.get("id")]
+                        all_folders.extend(child_ids)
+                        next_queue.extend(child_ids)
+                except Exception as e:
+                    logger.debug("Failed checking subfolders for %s: %s", pid, e)
+            queue = next_queue
+
+        return all_folders
+
     def list_videos(
         self,
         start_date: Optional[Union[datetime.date, datetime.datetime, str]] = None,
@@ -335,18 +406,21 @@ class GoogleDriveClient:
             "Authorization": f"Bearer {access_token}",
         }
 
-        # Build query clauses targeting real video containers while excluding code / preset false-positives
-        video_mime_clauses = (
-            "((mimeType contains 'video/' and mimeType != 'video/mp4v-es' and mimeType != 'video/mp2t') or "
-            "name contains '.mp4' or "
-            "name contains '.mov' or "
-            "name contains '.m4v' or "
-            "name contains '.mkv')"
-        )
-        query_parts = [video_mime_clauses, "trashed = false"]
+        query_parts: List[str] = ["trashed = false"]
 
-        if folder_id:
-            query_parts.append(f"'{folder_id}' in parents")
+        clean_folder = extract_folder_id(folder_id)
+        if clean_folder:
+            # Query parent folder and subfolders
+            subfolders = self.get_subfolder_ids(clean_folder)
+            target_folders = [clean_folder] + subfolders
+            if len(target_folders) == 1:
+                query_parts.append(f"'{clean_folder}' in parents")
+            else:
+                parent_clauses = " or ".join(f"'{fid}' in parents" for fid in target_folders[:30])
+                query_parts.append(f"({parent_clauses})")
+        else:
+            # Global scan across entire Drive: target video MIME types
+            query_parts.append("mimeType contains 'video/'")
 
         parsed_start = _parse_date(start_date)
         parsed_end = _parse_date(end_date)
@@ -368,6 +442,7 @@ class GoogleDriveClient:
             query_parts.append(f"createdTime <= '{end_iso}'")
 
         full_query = " and ".join(query_parts)
+        logger.info("Executing Google Drive search query: %s", full_query)
 
         params: Dict[str, Any] = {
             "q": full_query,
@@ -403,6 +478,11 @@ class GoogleDriveClient:
                 size_bytes=int(it.get("size", 0)) if it.get("size") else None,
             )
         ]
+        logger.info(
+            "Drive query returned %d raw file(s), %d verified video candidate(s)",
+            len(raw_items),
+            len(filtered_items),
+        )
         next_token = data.get("nextPageToken")
         return filtered_items, next_token
 

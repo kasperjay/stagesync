@@ -58,11 +58,12 @@ class TestGoogleDrive(unittest.TestCase):
         }
         mock_get.return_value = mock_resp
 
-        files, next_token = self.client.list_videos(
-            start_date="2024-08-01",
-            end_date="2024-08-31",
-            folder_id="folder_abc",
-        )
+        with patch.object(self.client, "get_subfolder_ids", return_value=[]):
+            files, next_token = self.client.list_videos(
+                start_date="2024-08-01",
+                end_date="2024-08-31",
+                folder_id="folder_abc",
+            )
 
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0]["id"], "file_123")
@@ -71,11 +72,15 @@ class TestGoogleDrive(unittest.TestCase):
         call_args, call_kwargs = mock_get.call_args
         params = call_kwargs["params"]
         query = params["q"]
-        self.assertIn("mimeType contains 'video/'", query)
-        self.assertIn("trashed = false", query)
         self.assertIn("'folder_abc' in parents", query)
+        self.assertIn("trashed = false", query)
         self.assertIn("createdTime >= '2024-08-01T00:00:00Z'", query)
         self.assertIn("createdTime <= '2024-08-31T23:59:59Z'", query)
+
+        # Global scan without folder_id targets video MIME types
+        self.client.list_videos()
+        call_args2, call_kwargs2 = mock_get.call_args
+        self.assertIn("mimeType contains 'video/'", call_kwargs2["params"]["q"])
 
     @patch.object(GoogleDriveClient, "get_access_token", return_value="fake_drive_token")
     @patch("requests.get")

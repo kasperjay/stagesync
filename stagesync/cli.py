@@ -27,6 +27,7 @@ from rich.text import Text
 from stagesync.config import get_settings
 from stagesync.database.connection import Database, get_db
 from stagesync.database.models import PrivacyStatus, VideoStatus
+from stagesync.ingestion.google_drive import extract_folder_id
 from stagesync.ingestion.google_photos import GooglePhotosClient
 from stagesync.pipeline import PipelineCoordinator
 from stagesync.publisher.youtube_auth import YouTubeAuth
@@ -185,6 +186,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
         return
 
     if getattr(args, "drive", False):
+        clean_folder = extract_folder_id(getattr(args, "drive_folder", None))
         date_info = []
         if args.start_date:
             date_info.append(f"from {args.start_date}")
@@ -192,7 +194,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
             date_info.append(f"to {args.end_date}")
         if not date_info and args.days:
             date_info.append(f"past {args.days} days")
-        folder_desc = f" in folder {args.drive_folder}" if getattr(args, "drive_folder", None) else ""
+        folder_desc = f" in folder {clean_folder}" if clean_folder else ""
         date_desc = " ".join(date_info) if date_info else "all dates"
 
         console.print(f"[bold cyan]Scanning Google Drive ({date_desc}{folder_desc})...[/bold cyan]")
@@ -205,7 +207,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     start_date=args.start_date,
                     end_date=args.end_date,
                     days=args.days if (not args.start_date and not args.end_date) else None,
-                    folder_id=getattr(args, "drive_folder", None),
+                    folder_id=clean_folder,
                     dry_run=args.dry_run,
                     limit=args.limit,
                 )
