@@ -360,6 +360,7 @@ class PipelineCoordinator:
                     corr = self.spatial_correlator.correlate_video_location(
                         video_recorded_at=item.get("createdTime"),
                         photo_samples=drive_photo_samples,
+                        video_recorded_at_local=image_meta.get("time") or video_meta.get("time"),
                     )
                     if corr:
                         lat = corr.latitude
@@ -453,8 +454,10 @@ class PipelineCoordinator:
                 # Correlate GPS from neighbor photos if video lacks coordinates
                 if (v.latitude is None or v.longitude is None) and local_photo_samples:
                     corr = self.spatial_correlator.correlate_video_location(
-                        video_recorded_at=v.recorded_at_utc or v.recorded_at_local,
+                        video_recorded_at=v.recorded_at_utc,
                         photo_samples=local_photo_samples,
+                        fallback_date_str=v.recorded_at_local[:10] if v.recorded_at_local else None,
+                        video_recorded_at_local=v.recorded_at_local,
                     )
                     if corr:
                         v.latitude = corr.latitude
@@ -532,11 +535,11 @@ class PipelineCoordinator:
             video.recorded_at_utc = parsed_meta.recorded_at_utc
             video.recorded_at_local = parsed_meta.recorded_at_local
             video.timezone_offset_minutes = parsed_meta.timezone_offset_minutes
-            video.latitude = parsed_meta.latitude
-            video.longitude = parsed_meta.longitude
-            video.altitude_meters = parsed_meta.altitude_meters
-            video.device_make = parsed_meta.device_make
-            video.device_model = parsed_meta.device_model
+            video.latitude = parsed_meta.latitude or video.latitude
+            video.longitude = parsed_meta.longitude or video.longitude
+            video.altitude_meters = parsed_meta.altitude_meters or video.altitude_meters
+            video.device_make = parsed_meta.device_make or video.device_make
+            video.device_model = parsed_meta.device_model or video.device_model
             video.is_concert_candidate = parsed_meta.is_concert_candidate
             video.concert_confidence_score = parsed_meta.concert_confidence_score
             video.processing_status = VideoStatus.ANALYZING_METADATA
@@ -567,8 +570,10 @@ class PipelineCoordinator:
 
                 # 3. Correlate with closest neighbor photo
                 corr = self.spatial_correlator.correlate_video_location(
-                    video_recorded_at=video.recorded_at_utc or video.recorded_at_local,
+                    video_recorded_at=video.recorded_at_utc,
                     photo_samples=photo_samples,
+                    fallback_date_str=video.recorded_at_local[:10] if video.recorded_at_local else None,
+                    video_recorded_at_local=video.recorded_at_local,
                 )
                 if corr:
                     video.latitude = corr.latitude
@@ -817,11 +822,43 @@ class PipelineCoordinator:
         )
         return video
 
-    def process_pending_videos(self, limit: int = 50) -> List[Video]:
-        """Process discovered or downloaded videos through the pipeline."""
-        candidates = self.db.list_videos(status=VideoStatus.DOWNLOADED, limit=limit)
-        if not candidates:
-            candidates = self.db.list_videos(status=VideoStatus.DISCOVERED, limit=limit)
+    def process_pending_videos(
+        self,
+        limit: int = 50,
+        status: Optional[Union[VideoStatus, str]] = None,
+        reprocess: bool = False,
+    ) -> List[Video]:
+        """Process discovered, downloaded, or pending videos through the pipeline."""
+        target_status: Optional[VideoStatus] = None
+        if status:
+            if isinstance(status, VideoStatus):
+                target_status = status
+            elif isinstance(status, str):
+                try:
+                    target_status = VideoStatus(status)
+                except ValueError:
+                    target_status = None
+
+        candidates: List[Video] = []
+        if target_status:
+            candidates = self.db.list_videos(status=target_status, limit=limit)
+        elif reprocess:
+            candidates = []
+            for st in (VideoStatus.DOWNLOADED, VideoStatus.PENDING_REVIEW, VideoStatus.DISCOVERED):
+                for v in self.db.list_videos(status=st):
+                    if v.latitude is None or not self.db.get_identification_by_video_id(v.id):
+                        candidates.append(v)
+                    if len(candidates) >= limit:
+                        break
+                if len(candidates) >= limit:
+                    break
+        else:
+            candidates = self.db.list_videos(status=VideoStatus.DOWNLOADED, limit=limit)
+            if not candidates:
+                candidates = self.db.list_videos(status=VideoStatus.DISCOVERED, limit=limit)
+            if not candidates:
+                review_cands = self.db.list_videos(status=VideoStatus.PENDING_REVIEW, limit=limit)
+                candidates = [v for v in review_cands if v.latitude is None][:limit]
 
         processed = []
         for v in candidates:

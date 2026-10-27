@@ -301,10 +301,16 @@ def cmd_scan(args: argparse.Namespace) -> None:
 def cmd_process(args: argparse.Namespace) -> None:
     """Run intelligence pipeline on newly cataloged video assets."""
     coordinator = PipelineCoordinator()
-    console.print(f"[bold cyan]Processing pending videos (Limit: {args.limit})...[/bold cyan]")
+    reproc_desc = " [reprocess mode]" if getattr(args, "reprocess", False) else ""
+    status_desc = f" [status={args.status}]" if getattr(args, "status", None) else ""
+    console.print(f"[bold cyan]Processing pending videos (Limit: {args.limit}){status_desc}{reproc_desc}...[/bold cyan]")
 
     with console.status("[bold green]Running metadata extraction & concert intelligence..."):
-        processed = coordinator.process_pending_videos(limit=args.limit)
+        processed = coordinator.process_pending_videos(
+            limit=args.limit,
+            status=getattr(args, "status", None),
+            reprocess=getattr(args, "reprocess", False),
+        )
 
     if not processed:
         console.print("[yellow]No pending videos found to process.[/yellow]")
@@ -637,6 +643,8 @@ def main() -> None:
     # process
     p_process = subparsers.add_parser("process", help="Process discovered videos through intelligence pipeline")
     p_process.add_argument("--limit", type=int, default=50, help="Max candidates to process")
+    p_process.add_argument("--status", type=str, default=None, help="Filter videos by status (e.g. DOWNLOADED, PENDING_REVIEW)")
+    p_process.add_argument("--reprocess", action="store_true", help="Re-process candidates missing GPS coordinates or identification")
     p_process.set_defaults(func=cmd_process)
 
     # review

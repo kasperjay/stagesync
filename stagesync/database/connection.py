@@ -379,6 +379,16 @@ class Database:
     def save_venue(self, venue: Venue) -> Venue:
         """Insert or update venue record."""
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        conn = self._get_connection()
+        if venue.osm_id:
+            row = conn.execute("SELECT id FROM venues WHERE osm_id = :osm LIMIT 1", {"osm": venue.osm_id}).fetchone()
+            if row:
+                venue.id = row[0]
+        elif venue.setlist_fm_venue_id:
+            row = conn.execute("SELECT id FROM venues WHERE setlist_fm_venue_id = :sid LIMIT 1", {"sid": venue.setlist_fm_venue_id}).fetchone()
+            if row:
+                venue.id = row[0]
+
         sql = """
         INSERT INTO venues (
             id, name, formatted_address, city, state_province, country_code,
@@ -484,6 +494,12 @@ class Database:
     def save_concert(self, concert: Concert) -> Concert:
         """Insert or update concert record."""
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        if concert.setlist_fm_event_id:
+            conn = self._get_connection()
+            row = conn.execute("SELECT id FROM concerts WHERE setlist_fm_event_id = :sid LIMIT 1", {"sid": concert.setlist_fm_event_id}).fetchone()
+            if row:
+                concert.id = row[0]
+
         sql = """
         INSERT INTO concerts (
             id, venue_id, headliner_artist, lineup_artists, tour_name,

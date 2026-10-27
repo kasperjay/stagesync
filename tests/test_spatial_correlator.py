@@ -154,6 +154,54 @@ class TestSpatialTemporalCorrelator(unittest.TestCase):
         )
         self.assertIsNone(corr)
 
+    def test_parse_timestamp_formats(self) -> None:
+        """Verify robust parsing of EXIF colons and ISO timestamps."""
+        # EXIF format with colons
+        exif_dt = SpatialTemporalCorrelator.parse_timestamp("2023:10:13 20:34:13")
+        self.assertIsNotNone(exif_dt)
+        assert exif_dt is not None
+        self.assertEqual(exif_dt.year, 2023)
+        self.assertEqual(exif_dt.month, 10)
+        self.assertEqual(exif_dt.day, 13)
+        self.assertEqual(exif_dt.hour, 20)
+        self.assertEqual(exif_dt.minute, 34)
+
+        # ISO format
+        iso_dt = SpatialTemporalCorrelator.parse_timestamp("2023-10-14T01:45:35Z")
+        self.assertIsNotNone(iso_dt)
+        assert iso_dt is not None
+        self.assertEqual(iso_dt.year, 2023)
+        self.assertEqual(iso_dt.month, 10)
+        self.assertEqual(iso_dt.day, 14)
+        self.assertEqual(iso_dt.hour, 1)
+        self.assertEqual(iso_dt.minute, 45)
+
+    def test_correlate_local_time_and_utc_cross_midnight(self) -> None:
+        """Verify correlation when photo is recorded in local camera time and video is in UTC."""
+        # Photo taken at 8:34 PM local time (20:34:13)
+        photo_sample = PhotoLocationSample(
+            filename="IMG_6127.JPG",
+            latitude=30.2418,
+            longitude=-97.7287,
+            timestamp_utc=datetime.datetime(2023, 10, 13, 20, 34, 13, tzinfo=datetime.timezone.utc),
+            device_make="Apple",
+            device_model="iPhone 14 Pro",
+        )
+
+        # Video taken at 8:45 PM local time (which is 01:45 UTC next day in CDT)
+        corr = self.correlator.correlate_video_location(
+            video_recorded_at="2023-10-14T01:45:35Z",
+            video_recorded_at_local="2023-10-13T20:45:35",
+            photo_samples=[photo_sample],
+        )
+
+        self.assertIsNotNone(corr)
+        assert corr is not None
+        self.assertAlmostEqual(corr.latitude, 30.2418, places=4)
+        self.assertAlmostEqual(corr.longitude, -97.7287, places=4)
+        # Delta should be ~11.4 minutes (682 seconds), not 5 hours!
+        self.assertAlmostEqual(corr.time_delta_seconds, 682.0, delta=5.0)
+
     def test_scan_local_directory_for_photos(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             dir_path = Path(tmp_dir)

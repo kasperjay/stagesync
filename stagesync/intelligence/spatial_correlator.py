@@ -57,8 +57,42 @@ class CorrelatedLocation:
 class SpatialTemporalCorrelator:
     """Indexes neighbor photos and correlates missing video GPS coordinates."""
 
+    _drive_folder_cache: Dict[str, List[PhotoLocationSample]] = {}
+
     def __init__(self, max_window_hours: float = 6.0) -> None:
         self.max_window_seconds = max_window_hours * 3600.0
+
+    @staticmethod
+    def parse_timestamp(val: Any) -> Optional[datetime.datetime]:
+        """Robustly parse timestamps from EXIF colons, ISO-8601 strings, or datetime objects."""
+        if not val:
+            return None
+        if isinstance(val, datetime.datetime):
+            return val.astimezone(datetime.timezone.utc) if val.tzinfo else val.replace(tzinfo=datetime.timezone.utc)
+        val_str = str(val).strip()
+        if not val_str:
+            return None
+        import re
+        match = re.match(
+            r"^(\d{4})[:\-](\d{2})[:\-](\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|([+\-])(\d{2}):?(\d{2}))?$",
+            val_str,
+        )
+        if match:
+            y, mo, d, H, M, S, frac, sign, tz_h, tz_m = match.groups()
+            dt = datetime.datetime(int(y), int(mo), int(d), int(H), int(M), int(S))
+            if sign and tz_h and tz_m:
+                offset_mins = int(tz_h) * 60 + int(tz_m)
+                if sign == "-":
+                    offset_mins = -offset_mins
+                tz = datetime.timezone(datetime.timedelta(minutes=offset_mins))
+                return dt.replace(tzinfo=tz).astimezone(datetime.timezone.utc)
+            return dt.replace(tzinfo=datetime.timezone.utc)
+        try:
+            clean_str = re.sub(r"^(\d{4}):(\d{2}):(\d{2})", r"\1-\2-\3", val_str)
+            parsed = dt_parser.parse(clean_str)
+            return parsed.astimezone(datetime.timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=datetime.timezone.utc)
+        except Exception:
+            return None
 
     # -------------------------------------------------------------------------
     # Pure-Python EXIF Parsing (Zero External C Dependencies)
@@ -168,27 +202,9 @@ class SpatialTemporalCorrelator:
             time_bytes = tiff[off : off + count] if count > 4 else val[:count]
             time_str = time_bytes.decode("ascii", errors="ignore").strip("\x00").strip()
 
+        sample_time: Optional[datetime.datetime] = None
         if time_str:
-            try:
-                import re
-                match = re.search(
-                    r"(\d{4})[:\-](\d{2})[:\-](\d{2})[ T](\d{2}):(\d{2}):(\d{2})",
-                    time_str,
-                )
-                if match:
-                    y, mo, d, H, M, S = match.groups()
-                    sample_time = datetime.datetime(
-                        int(y), int(mo), int(d), int(H), int(M), int(S), tzinfo=datetime.timezone.utc
-                    )
-                else:
-                    parsed_dt = dt_parser.parse(time_str)
-                    sample_time = (
-                        parsed_dt.astimezone(datetime.timezone.utc)
-                        if parsed_dt.tzinfo
-                        else parsed_dt.replace(tzinfo=datetime.timezone.utc)
-                    )
-            except Exception:
-                sample_time = None
+            sample_time = SpatialTemporalCorrelator.parse_timestamp(time_str)
 
         # GPS SubIFD (Tag 0x8825)
         if 0x8825 not in ifd0:
@@ -347,8 +363,12 @@ class SpatialTemporalCorrelator:
     def index_drive_folder_photos(
         drive_client: Any,
         folder_id: str,
+        use_cache: bool = True,
     ) -> List[PhotoLocationSample]:
         """Query Google Drive folder for still photos containing imageMediaMetadata GPS."""
+        if use_cache and folder_id in SpatialTemporalCorrelator._drive_folder_cache:
+            return SpatialTemporalCorrelator._drive_folder_cache[folder_id]
+
         samples: List[PhotoLocationSample] = []
         try:
             token = drive_client.get_access_token()
@@ -393,19 +413,7 @@ class SpatialTemporalCorrelator:
                     photo_time_str = img_meta.get("time") or item.get("createdTime")
                     dt: Optional[datetime.datetime] = None
                     if photo_time_str:
-                        try:
-                            if ":" in photo_time_str[:4]:
-                                clean_t = photo_time_str[:10].replace(":", "-") + photo_time_str[10:]
-                            else:
-                                clean_t = photo_time_str
-                            parsed_dt = dt_parser.parse(clean_t)
-                            dt = (
-                                parsed_dt.astimezone(datetime.timezone.utc)
-                                if parsed_dt.tzinfo
-                                else parsed_dt.replace(tzinfo=datetime.timezone.utc)
-                            )
-                        except Exception:
-                            dt = None
+                        dt = SpatialTemporalCorrelator.parse_timestamp(photo_time_str)
 
                     samples.append(
                         PhotoLocationSample(
@@ -425,6 +433,8 @@ class SpatialTemporalCorrelator:
                     break
 
             logger.info("Found %d GPS-tagged photos in Drive folder %s", len(samples), folder_id)
+            if samples:
+                SpatialTemporalCorrelator._drive_folder_cache[folder_id] = samples
         except Exception as e:
             logger.warning("Could not query Drive folder %s for photo locations: %s", folder_id, e)
 
@@ -439,39 +449,33 @@ class SpatialTemporalCorrelator:
         video_recorded_at: Optional[Union[str, datetime.datetime]],
         photo_samples: List[PhotoLocationSample],
         fallback_date_str: Optional[str] = None,
+        video_recorded_at_local: Optional[Union[str, datetime.datetime]] = None,
     ) -> Optional[CorrelatedLocation]:
         """Find the closest neighbor photo in time and inherit its GPS coordinates."""
         if not photo_samples:
             return None
 
-        # Parse target video timestamp
-        video_dt: Optional[datetime.datetime] = None
-        if isinstance(video_recorded_at, datetime.datetime):
-            video_dt = (
-                video_recorded_at.astimezone(datetime.timezone.utc)
-                if video_recorded_at.tzinfo
-                else video_recorded_at.replace(tzinfo=datetime.timezone.utc)
-            )
-        elif isinstance(video_recorded_at, str) and video_recorded_at:
-            try:
-                parsed = dt_parser.parse(video_recorded_at)
-                video_dt = (
-                    parsed.astimezone(datetime.timezone.utc)
-                    if parsed.tzinfo
-                    else parsed.replace(tzinfo=datetime.timezone.utc)
-                )
-            except Exception:
-                video_dt = None
+        # Parse target video timestamps (both UTC and local if available)
+        video_dt_utc = self.parse_timestamp(video_recorded_at)
+        video_dt_local = self.parse_timestamp(video_recorded_at_local) if video_recorded_at_local else None
 
         # If timestamp is known, compute exact delta seconds
-        if video_dt:
+        if video_dt_utc or video_dt_local:
             best_sample: Optional[PhotoLocationSample] = None
             min_delta_s = float("inf")
 
             for s in photo_samples:
                 if s.timestamp_utc is None:
                     continue
-                delta = abs((s.timestamp_utc - video_dt).total_seconds())
+                # Calculate delta against UTC and Local (if present), taking the true minimum
+                deltas = []
+                if video_dt_utc:
+                    deltas.append(abs((s.timestamp_utc - video_dt_utc).total_seconds()))
+                if video_dt_local:
+                    deltas.append(abs((s.timestamp_utc - video_dt_local).total_seconds()))
+                if not deltas:
+                    continue
+                delta = min(deltas)
                 if delta < min_delta_s:
                     min_delta_s = delta
                     best_sample = s
@@ -498,18 +502,20 @@ class SpatialTemporalCorrelator:
                     device_model=best_sample.device_model,
                 )
 
-        # Fallback: Match by calendar date (e.g. "2016-12-15")
-        target_date_str = None
-        if video_dt:
-            target_date_str = video_dt.strftime("%Y-%m-%d")
-        elif fallback_date_str:
-            target_date_str = fallback_date_str[:10]
+        # Fallback: Match by calendar date (e.g. "2023-10-13")
+        target_dates = set()
+        if video_dt_local:
+            target_dates.add(video_dt_local.strftime("%Y-%m-%d"))
+        if video_dt_utc:
+            target_dates.add(video_dt_utc.strftime("%Y-%m-%d"))
+        if fallback_date_str:
+            target_dates.add(fallback_date_str[:10])
 
-        if target_date_str:
+        if target_dates:
             same_day_samples = [
                 s
                 for s in photo_samples
-                if s.timestamp_utc and s.timestamp_utc.strftime("%Y-%m-%d") == target_date_str
+                if s.timestamp_utc and s.timestamp_utc.strftime("%Y-%m-%d") in target_dates
             ]
             if same_day_samples:
                 # Pick the first or highest-quality sample on that day
@@ -517,7 +523,7 @@ class SpatialTemporalCorrelator:
                 logger.info(
                     "Correlated location by same-day match with photo %s on %s (Coords: %.4f, %.4f)",
                     chosen.filename,
-                    target_date_str,
+                    target_dates,
                     chosen.latitude,
                     chosen.longitude,
                 )
@@ -526,7 +532,7 @@ class SpatialTemporalCorrelator:
                     longitude=chosen.longitude,
                     altitude_meters=chosen.altitude_meters,
                     source_reference=chosen.source_reference or f"same_day:{chosen.filename}",
-                    time_delta_seconds=0.0,
+                    time_delta_seconds=86400.0,
                     photo_timestamp=chosen.timestamp_utc.isoformat()
                     if chosen.timestamp_utc
                     else None,
