@@ -72,6 +72,7 @@ class TestGoogleDrive(unittest.TestCase):
         call_args, call_kwargs = mock_get.call_args
         params = call_kwargs["params"]
         query = params["q"]
+        self.assertIn("mimeType contains 'video/'", query)
         self.assertIn("'folder_abc' in parents", query)
         self.assertIn("trashed = false", query)
         self.assertIn("createdTime >= '2024-08-01T00:00:00Z'", query)

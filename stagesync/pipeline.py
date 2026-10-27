@@ -269,20 +269,31 @@ class PipelineCoordinator:
             dry_run,
         )
         discovered_videos: List[Video] = []
+        target_limit = limit or 50
+        page_token: Optional[str] = None
+        all_items: List[Dict[str, Any]] = []
 
         try:
-            items, _ = self.drive_client.list_videos(
-                start_date=start_date,
-                end_date=end_date,
-                days=days,
-                folder_id=clean_folder,
-                page_size=limit,
-            )
+            while len(all_items) < target_limit:
+                page_size = min(100, target_limit - len(all_items))
+                items_page, next_token = self.drive_client.list_videos(
+                    start_date=start_date,
+                    end_date=end_date,
+                    days=days,
+                    folder_id=clean_folder,
+                    page_size=page_size,
+                    page_token=page_token,
+                )
+                all_items.extend(items_page)
+                if not next_token or not items_page:
+                    break
+                page_token = next_token
         except Exception as e:
             logger.error("Failed to query Google Drive: %s", e)
-            raise RuntimeError(f"Google Drive query failed: {e}") from e
+            if not all_items:
+                raise RuntimeError(f"Google Drive query failed: {e}") from e
 
-        for item in items:
+        for item in all_items:
             file_id = item.get("id")
             if not file_id:
                 continue

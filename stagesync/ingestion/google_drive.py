@@ -37,6 +37,8 @@ VALID_VIDEO_EXTENSIONS = {
     ".flv",
     ".mpg",
     ".mpeg",
+    ".m2ts",
+    ".mts",
 }
 
 DISALLOWED_EXTENSIONS = {
@@ -408,6 +410,10 @@ class GoogleDriveClient:
 
         query_parts: List[str] = ["trashed = false"]
 
+        # Scope search to video MIME types or common video container filenames
+        video_clause = "(mimeType contains 'video/' or name contains '.mp4' or name contains '.mov' or name contains '.m4v' or name contains '.mkv')"
+        query_parts.append(video_clause)
+
         clean_folder = extract_folder_id(folder_id)
         if clean_folder:
             # Query parent folder and subfolders
@@ -418,9 +424,6 @@ class GoogleDriveClient:
             else:
                 parent_clauses = " or ".join(f"'{fid}' in parents" for fid in target_folders[:30])
                 query_parts.append(f"({parent_clauses})")
-        else:
-            # Global scan across entire Drive: target video MIME types
-            query_parts.append("mimeType contains 'video/'")
 
         parsed_start = _parse_date(start_date)
         parsed_end = _parse_date(end_date)
