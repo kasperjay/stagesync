@@ -1610,7 +1610,7 @@ async def handle_list_videos(request: web.Request) -> web.Response:
     """Return JSON list of cataloged videos with embedded related records."""
     db: Database = request.app[DB_KEY]
     status_param = request.query.get("status")
-    limit = int(request.query.get("limit", 100))
+    limit = int(request.query.get("limit", 500))
 
     target_status = VideoStatus(status_param) if status_param else None
     videos = db.list_videos(status=target_status, limit=limit)
@@ -1618,23 +1618,23 @@ async def handle_list_videos(request: web.Request) -> web.Response:
     results = []
     for v in videos:
         data = serialize_model(v)
-        # Embed related venue & concert & identification
-        if v.venue_id:
-            venue = db.get_venue(v.venue_id)
-            data["venue"] = serialize_model(venue)
-        else:
-            data["venue"] = None
-
-        if v.concert_id:
-            concert = db.get_concert(v.concert_id)
-            data["concert"] = serialize_model(concert)
-        else:
-            data["concert"] = None
-
-        ident = db.get_identification_by_video(v.id)
+        # Embed related identification, concert, venue, and upload
+        ident = db.get_identification_by_video_id(v.id)
         data["identification"] = serialize_model(ident)
 
-        upload = db.get_upload_by_video(v.id)
+        concert = None
+        venue = None
+        if ident and ident.concert_id:
+            concert = db.get_concert(ident.concert_id)
+        if concert and concert.venue_id:
+            venue = db.get_venue(concert.venue_id)
+        elif v.latitude and v.longitude:
+            venue = db.find_venue_by_coords(v.latitude, v.longitude)
+
+        data["concert"] = serialize_model(concert)
+        data["venue"] = serialize_model(venue)
+
+        upload = db.get_youtube_upload_by_video_id(v.id)
         data["upload"] = serialize_model(upload)
 
         results.append(data)
@@ -1651,17 +1651,22 @@ async def handle_get_video(request: web.Request) -> web.Response:
         return web.json_response({"error": "Video not found"}, status=404)
 
     data = serialize_model(video)
-    if video.venue_id:
-        v = db.get_venue(video.venue_id)
-        data["venue"] = serialize_model(v)
-    if video.concert_id:
-        c = db.get_concert(video.concert_id)
-        data["concert"] = serialize_model(c)
-
-    ident = db.get_identification_by_video(video.id)
+    ident = db.get_identification_by_video_id(video.id)
     data["identification"] = serialize_model(ident)
 
-    upload = db.get_upload_by_video(video.id)
+    concert = None
+    venue = None
+    if ident and ident.concert_id:
+        concert = db.get_concert(ident.concert_id)
+    if concert and concert.venue_id:
+        venue = db.get_venue(concert.venue_id)
+    elif video.latitude and video.longitude:
+        venue = db.find_venue_by_coords(video.latitude, video.longitude)
+
+    data["concert"] = serialize_model(concert)
+    data["venue"] = serialize_model(venue)
+
+    upload = db.get_youtube_upload_by_video_id(video.id)
     data["upload"] = serialize_model(upload)
 
     return web.json_response(data)
