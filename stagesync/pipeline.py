@@ -28,6 +28,7 @@ from stagesync.database.models import (
     VideoStatus,
     YouTubeUpload,
 )
+from stagesync.ingestion.google_drive import GoogleDriveClient
 from stagesync.ingestion.google_photos import GooglePhotosClient
 from stagesync.ingestion.metadata_parser import MetadataParser, ParsedVideoMetadata
 from stagesync.intelligence.ai_audio_judge import AIAudioJudge
@@ -55,6 +56,7 @@ class PipelineCoordinator:
 
         # Ingestion components
         self.photos_client = GooglePhotosClient()
+        self.drive_client = GoogleDriveClient()
         self.metadata_parser = MetadataParser()
 
         # Intelligence components
@@ -236,6 +238,98 @@ class PipelineCoordinator:
                     video.processing_status = VideoStatus.DOWNLOADED
                 except Exception as e:
                     logger.error("Download failed for picker item %s: %s", media_id, e)
+                    video.processing_status = VideoStatus.FAILED
+
+            saved = self.db.save_video(video)
+            discovered_videos.append(saved)
+
+        return discovered_videos
+
+    def scan_google_drive(
+        self,
+        start_date: Optional[Union[datetime.date, datetime.datetime, str]] = None,
+        end_date: Optional[Union[datetime.date, datetime.datetime, str]] = None,
+        days: Optional[int] = None,
+        folder_id: Optional[str] = None,
+        dry_run: bool = False,
+        limit: int = 50,
+    ) -> List[Video]:
+        """Scan Google Drive for video files matching date range and catalog discoveries."""
+        logger.info(
+            "Scanning Google Drive (start_date=%s, end_date=%s, days=%s, folder_id=%s, dry_run=%s)",
+            start_date,
+            end_date,
+            days,
+            folder_id,
+            dry_run,
+        )
+        discovered_videos: List[Video] = []
+
+        try:
+            items, _ = self.drive_client.list_videos(
+                start_date=start_date,
+                end_date=end_date,
+                days=days,
+                folder_id=folder_id,
+                page_size=limit,
+            )
+        except Exception as e:
+            logger.error("Failed to query Google Drive: %s", e)
+            raise RuntimeError(f"Google Drive query failed: {e}") from e
+
+        for item in items:
+            file_id = item.get("id")
+            if not file_id:
+                continue
+
+            source_id = f"drive_{file_id}"
+            existing = self.db.get_video_by_source_id(source_id)
+            if existing:
+                continue
+
+            raw_filename = item.get("name", f"drive_video_{file_id}.mp4")
+            clean_filename = sanitize_filename(raw_filename)
+            video_meta = item.get("videoMediaMetadata") or {}
+            image_meta = item.get("imageMediaMetadata") or {}
+            loc = image_meta.get("location") or {}
+
+            width = int(video_meta.get("width", 0)) or None
+            height = int(video_meta.get("height", 0)) or None
+            duration_ms = float(video_meta.get("durationMillis", 0)) or 0.0
+            duration_sec = duration_ms / 1000.0 if duration_ms > 0 else None
+
+            lat = float(loc.get("latitude")) if loc.get("latitude") is not None else None
+            lng = float(loc.get("longitude")) if loc.get("longitude") is not None else None
+
+            file_size = int(item.get("size", 0)) if item.get("size") else None
+
+            video = Video(
+                source_photo_id=source_id,
+                filename=clean_filename,
+                mime_type=item.get("mimeType", "video/mp4"),
+                width=width,
+                height=height,
+                duration_seconds=duration_sec,
+                latitude=lat,
+                longitude=lng,
+                file_size_bytes=file_size,
+                recorded_at_utc=item.get("createdTime"),
+                processing_status=VideoStatus.DISCOVERED,
+            )
+
+            if dry_run:
+                video.processing_status = VideoStatus.DISCOVERED
+            else:
+                target_file = self.download_dir / f"{video.id}_{clean_filename}"
+                try:
+                    self.db.update_video_status(video.id, VideoStatus.DOWNLOADING)
+                    file_path, sha_hash = self.drive_client.download_video(file_id, target_file)
+                    video.file_path = str(file_path)
+                    video.file_hash_sha256 = sha_hash
+                    video.file_size_bytes = file_path.stat().st_size
+                    video.processing_status = VideoStatus.DOWNLOADED
+                except Exception as e:
+                    logger.error("Download failed for Drive file %s: %s", file_id, e)
                     video.processing_status = VideoStatus.FAILED
 
             saved = self.db.save_video(video)

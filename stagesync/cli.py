@@ -101,6 +101,12 @@ def cmd_status(args: argparse.Namespace) -> None:
     gp_auth = "[green]Authenticated[/green]" if photos_client.is_authenticated() else "[red]Not Configured[/red]"
     quota_table.add_row("Google Photos Library API", gp_auth, "10,000 read requests / day")
 
+    # Google Drive
+    from stagesync.ingestion.google_drive import GoogleDriveClient
+    drive_client = GoogleDriveClient()
+    gd_auth = "[green]Authenticated[/green]" if drive_client.is_authenticated() else "[red]Not Configured[/red]"
+    quota_table.add_row("Google Drive API v3", gd_auth, "1,000,000 queries / day (Full video metadata & files.list)")
+
     # YouTube Data API
     yt_status = "[green]Authenticated[/green]" if yt_auth.is_authenticated() else "[red]Not Configured[/red]"
     uploads_today = db.get_todays_upload_count()
@@ -176,6 +182,56 @@ def cmd_scan(args: argparse.Namespace) -> None:
             console.print(table)
         except Exception as e:
             console.print(f"\n[bold red]✗ Picker Error:[/bold red] {e}")
+        return
+
+    if getattr(args, "drive", False):
+        date_info = []
+        if args.start_date:
+            date_info.append(f"from {args.start_date}")
+        if args.end_date:
+            date_info.append(f"to {args.end_date}")
+        if not date_info and args.days:
+            date_info.append(f"past {args.days} days")
+        folder_desc = f" in folder {args.drive_folder}" if getattr(args, "drive_folder", None) else ""
+        date_desc = " ".join(date_info) if date_info else "all dates"
+
+        console.print(f"[bold cyan]Scanning Google Drive ({date_desc}{folder_desc})...[/bold cyan]")
+        if args.dry_run:
+            console.print("[yellow]Running in DRY-RUN mode. Videos will be cataloged without downloading binaries.[/yellow]")
+
+        try:
+            with console.status("[bold green]Querying Google Drive API..."):
+                videos = coordinator.scan_google_drive(
+                    start_date=args.start_date,
+                    end_date=args.end_date,
+                    days=args.days if (not args.start_date and not args.end_date) else None,
+                    folder_id=getattr(args, "drive_folder", None),
+                    dry_run=args.dry_run,
+                    limit=args.limit,
+                )
+        except Exception as e:
+            console.print(f"\n[bold red]✗ Google Drive Query Failed:[/bold red] {e}\n")
+            if "unauthenticated" in str(e).lower() or "permissionerror" in str(e).lower():
+                console.print("[yellow]Run 'stagesync auth google-drive' to authenticate with Google Drive.[/yellow]\n")
+            return
+
+        if not videos:
+            console.print("[yellow]No new videos found on Google Drive for the specified criteria.[/yellow]")
+            return
+
+        table = Table(title=f"Google Drive Results ({len(videos)} candidates)", box=box.ROUNDED)
+        table.add_column("ID", style="dim", max_width=12)
+        table.add_column("Filename", style="cyan")
+        table.add_column("Size", justify="right")
+        table.add_column("Duration", justify="center")
+        table.add_column("Status", style="bold green")
+
+        for v in videos:
+            sz = format_file_size(v.file_size_bytes)
+            dur = format_duration(v.duration_seconds)
+            table.add_row(v.id[:8] + "...", v.filename, sz, dur, v.processing_status.value)
+
+        console.print(table)
         return
 
     # Google Photos Background Scan
@@ -441,6 +497,20 @@ def cmd_auth(args: argparse.Namespace) -> None:
         client.exchange_code(code.strip(), redirect_uri)
         console.print("[bold green]✓ Google Photos token successfully saved![/bold green]")
 
+    elif target in ("google-drive", "drive"):
+        from stagesync.ingestion.google_drive import GoogleDriveClient
+        client = GoogleDriveClient()
+        if client.is_authenticated():
+            console.print("[green]Google Drive is already authenticated.[/green]")
+            return
+        redirect_uri = client.redirect_uri or "http://localhost:8090/drive_callback"
+        url = client.get_authorization_url(redirect_uri)
+        console.print("\n[bold cyan]Google Drive Authorization:[/bold cyan]")
+        console.print(f"Open this URL in your browser:\n[link={url}]{url}[/link]\n")
+        code = Prompt.ask("Paste the authorization code received")
+        client.exchange_code(code.strip(), redirect_uri)
+        console.print("[bold green]✓ Google Drive token successfully saved![/bold green]")
+
     elif target == "youtube":
         yt = YouTubeAuth()
         if yt.is_authenticated():
@@ -519,11 +589,13 @@ def main() -> None:
     p_serve.set_defaults(func=cmd_serve)
 
     # scan
-    p_scan = subparsers.add_parser("scan", help="Scan Google Photos or local directory")
+    p_scan = subparsers.add_parser("scan", help="Scan Google Drive, Google Photos, or local directory")
+    p_scan.add_argument("--drive", action="store_true", help="Scan videos from Google Drive (Full search API)")
+    p_scan.add_argument("--drive-folder", type=str, default=None, help="Google Drive folder ID filter")
     p_scan.add_argument("--start-date", type=str, default=None, help="Start date (YYYY-MM-DD) for discovery")
     p_scan.add_argument("--end-date", type=str, default=None, help="End date (YYYY-MM-DD) for discovery")
-    p_scan.add_argument("--days", type=int, default=None, help="Days back to scan in Google Photos (e.g. 30)")
-    p_scan.add_argument("--album", type=str, default=None, help="Album ID filter")
+    p_scan.add_argument("--days", type=int, default=None, help="Days back to scan (e.g. 30)")
+    p_scan.add_argument("--album", type=str, default=None, help="Google Photos Album ID filter")
     p_scan.add_argument("--dir", type=str, default=None, help="Local directory path to scan")
     p_scan.add_argument("--picker", action="store_true", help="Launch interactive Google Photos Picker flow")
     p_scan.add_argument("--limit", type=int, default=50, help="Maximum items to scan")
@@ -548,7 +620,11 @@ def main() -> None:
 
     # auth
     p_auth = subparsers.add_parser("auth", help="OAuth authentication management")
-    p_auth.add_argument("service", choices=["google-photos", "youtube", "status"], help="Target authentication service")
+    p_auth.add_argument(
+        "service",
+        choices=["google-photos", "google-drive", "youtube", "status"],
+        help="Target authentication service",
+    )
     p_auth.set_defaults(func=cmd_auth)
 
     args = parser.parse_args()

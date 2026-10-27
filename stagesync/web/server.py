@@ -106,6 +106,11 @@ HTML_PAGE = """<!DOCTYPE html>
     <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4 text-xs">
       <div class="flex items-center gap-4 flex-wrap">
         <div class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full" id="dot-drive"></span>
+          <span class="text-zinc-300 font-medium">Google Drive:</span>
+          <span id="text-drive" class="text-zinc-400">Checking...</span>
+        </div>
+        <div class="flex items-center gap-1.5">
           <span class="w-2 h-2 rounded-full" id="dot-photos"></span>
           <span class="text-zinc-300 font-medium">Google Photos:</span>
           <span id="text-photos" class="text-zinc-400">Checking...</span>
@@ -173,7 +178,8 @@ HTML_PAGE = """<!DOCTYPE html>
               <span>🔍</span> Discovery Scan
             </h3>
             <div class="flex bg-zinc-950 p-0.5 rounded border border-zinc-800 text-xs">
-              <button type="button" id="scan-tab-btn-photos" onclick="setScanMode('photos')" class="px-2.5 py-1 rounded bg-zinc-800 text-zinc-200 font-medium">Google Photos</button>
+              <button type="button" id="scan-tab-btn-drive" onclick="setScanMode('drive')" class="px-2.5 py-1 rounded bg-zinc-800 text-zinc-200 font-medium">Google Drive</button>
+              <button type="button" id="scan-tab-btn-photos" onclick="setScanMode('photos')" class="px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium">Google Photos</button>
               <button type="button" id="scan-tab-btn-local" onclick="setScanMode('local')" class="px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium">Local Folder</button>
             </div>
           </div>
@@ -183,8 +189,40 @@ HTML_PAGE = """<!DOCTYPE html>
         <!-- Notification / Error Box -->
         <div id="scan-feedback-box" class="hidden text-xs"></div>
 
+        <!-- Mode: Google Drive (Recommended) -->
+        <div id="scan-mode-drive" class="space-y-3 text-xs">
+          <div class="bg-blue-950/30 border border-blue-900/40 rounded p-2.5 text-[11px] text-blue-200">
+            <span>⚡ Google Drive API supports full video search & date filtering without deprecation blocks.</span>
+          </div>
+          <div>
+            <label class="block text-zinc-400 mb-1">Start Date</label>
+            <input type="date" id="scan-drive-start-date" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
+          </div>
+          <div>
+            <label class="block text-zinc-400 mb-1">End Date</label>
+            <input type="date" id="scan-drive-end-date" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
+          </div>
+          <div>
+            <label class="block text-zinc-400 mb-1">Drive Folder ID (Optional)</label>
+            <input type="text" id="scan-drive-folder" placeholder="Leave blank to scan entire Drive" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
+          </div>
+          <div class="flex items-center justify-between pt-1 text-zinc-400">
+            <div class="flex items-center gap-1.5">
+              <span class="text-[11px]">Presets:</span>
+              <button type="button" onclick="setQuickDriveDays(7)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">7d</button>
+              <button type="button" onclick="setQuickDriveDays(30)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">30d</button>
+              <button type="button" onclick="setQuickDriveDays(90)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">90d</button>
+              <button type="button" onclick="setQuickDriveDays(365)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">1y</button>
+            </div>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" id="scan-drive-dry-run" class="rounded bg-zinc-950 border-zinc-800 text-blue-600">
+              <span class="text-[11px]">Dry Run</span>
+            </label>
+          </div>
+        </div>
+
         <!-- Mode: Google Photos -->
-        <div id="scan-mode-photos" class="space-y-3 text-xs">
+        <div id="scan-mode-photos" class="hidden space-y-3 text-xs">
           <div>
             <label class="block text-zinc-400 mb-1">Start Date</label>
             <input type="date" id="scan-start-date" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
@@ -254,6 +292,7 @@ HTML_PAGE = """<!DOCTYPE html>
         document.getElementById('text-quota').innerText = `Daily Quota: ${resStatus.uploads_today} / ${resStatus.max_daily_uploads} uploads used`;
 
         // Render Integrations
+        updateDot('dot-drive', 'text-drive', resStatus.services.google_drive?.authenticated);
         updateDot('dot-photos', 'text-photos', resStatus.services.google_photos.authenticated);
         updateDot('dot-yt', 'text-yt', resStatus.services.youtube.authenticated);
         updateDot('dot-setlist', 'text-setlist', resStatus.services.setlist_fm.has_key);
@@ -454,27 +493,44 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('scan-modal').classList.add('hidden');
     }
 
-    let currentScanMode = 'photos';
+    let currentScanMode = 'drive';
 
     function setScanMode(mode) {
       currentScanMode = mode;
+      const btnDrive = document.getElementById('scan-tab-btn-drive');
       const btnPhotos = document.getElementById('scan-tab-btn-photos');
       const btnLocal = document.getElementById('scan-tab-btn-local');
+      const viewDrive = document.getElementById('scan-mode-drive');
       const viewPhotos = document.getElementById('scan-mode-photos');
       const viewLocal = document.getElementById('scan-mode-local');
       document.getElementById('scan-feedback-box').classList.add('hidden');
 
-      if (mode === 'photos') {
+      // Reset all buttons
+      btnDrive.className = 'px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium';
+      btnPhotos.className = 'px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium';
+      btnLocal.className = 'px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium';
+      viewDrive.classList.add('hidden');
+      viewPhotos.classList.add('hidden');
+      viewLocal.classList.add('hidden');
+
+      if (mode === 'drive') {
+        btnDrive.className = 'px-2.5 py-1 rounded bg-zinc-800 text-zinc-200 font-medium';
+        viewDrive.classList.remove('hidden');
+      } else if (mode === 'photos') {
         btnPhotos.className = 'px-2.5 py-1 rounded bg-zinc-800 text-zinc-200 font-medium';
-        btnLocal.className = 'px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium';
         viewPhotos.classList.remove('hidden');
-        viewLocal.classList.add('hidden');
       } else {
         btnLocal.className = 'px-2.5 py-1 rounded bg-zinc-800 text-zinc-200 font-medium';
-        btnPhotos.className = 'px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium';
         viewLocal.classList.remove('hidden');
-        viewPhotos.classList.add('hidden');
       }
+    }
+
+    function setQuickDriveDays(days) {
+      const end = new Date();
+      const start = new Date();
+      start.setDate(end.getDate() - days);
+      document.getElementById('scan-drive-end-date').value = end.toISOString().split('T')[0];
+      document.getElementById('scan-drive-start-date').value = start.toISOString().split('T')[0];
     }
 
     function setQuickDays(days) {
@@ -502,11 +558,24 @@ HTML_PAGE = """<!DOCTYPE html>
             return;
           }
           payload = { directory: dirPath };
+        } else if (currentScanMode === 'drive') {
+          const startDate = document.getElementById('scan-drive-start-date').value;
+          const endDate = document.getElementById('scan-drive-end-date').value;
+          const folderId = document.getElementById('scan-drive-folder').value.trim();
+          const dryRun = document.getElementById('scan-drive-dry-run').checked;
+          payload = {
+            provider: 'google_drive',
+            start_date: startDate || undefined,
+            end_date: endDate || undefined,
+            folder_id: folderId || undefined,
+            dry_run: dryRun
+          };
         } else {
           const startDate = document.getElementById('scan-start-date').value;
           const endDate = document.getElementById('scan-end-date').value;
           const dryRun = document.getElementById('scan-dry-run').checked;
           payload = {
+            provider: 'google_photos',
             start_date: startDate || undefined,
             end_date: endDate || undefined,
             dry_run: dryRun
@@ -528,13 +597,16 @@ HTML_PAGE = """<!DOCTYPE html>
                 <div class="font-bold flex items-center gap-1.5">
                   <span>⚠️</span> Google Photos Scope Notice (403 Forbidden)
                 </div>
-                <p>Google has restricted broad automated background searches on user photo libraries.</p>
+                <p>Google has restricted broad automated background searches on personal photo libraries.</p>
                 <div class="pt-1 flex items-center gap-2">
+                  <button type="button" onclick="setScanMode('drive')" class="px-2 py-1 rounded bg-blue-900/60 hover:bg-blue-900 text-blue-100 font-semibold text-[11px]">
+                    Use Google Drive Tab ⚡
+                  </button>
                   <button type="button" onclick="setScanMode('local')" class="px-2 py-1 rounded bg-amber-900/60 hover:bg-amber-900 text-amber-100 font-semibold text-[11px]">
                     Use Local Folder Tab 📁
                   </button>
-                  <button type="button" onclick="launchPickerSession()" class="px-2 py-1 rounded bg-blue-900/60 hover:bg-blue-900 text-blue-100 font-semibold text-[11px]">
-                    Launch Photos Picker 📸
+                  <button type="button" onclick="launchPickerSession()" class="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-semibold text-[11px]">
+                    Photos Picker 📸
                   </button>
                 </div>
               </div>
@@ -669,11 +741,14 @@ async def handle_get_status(request: web.Request) -> web.Response:
         "uploads_today": uploads_today,
         "max_daily_uploads": settings.max_daily_uploads,
         "services": {
+            "google_drive": {
+                "authenticated": bool(coordinator.drive_client.is_authenticated()),
+            },
             "google_photos": {
-                "authenticated": coordinator.photos_client.is_authenticated(),
+                "authenticated": bool(coordinator.photos_client.is_authenticated()),
             },
             "youtube": {
-                "authenticated": coordinator.uploader.auth.is_authenticated(),
+                "authenticated": bool(coordinator.uploader.auth.is_authenticated()),
             },
             "setlist_fm": {
                 "has_key": bool(settings.setlist_fm_api_key),
@@ -833,6 +908,32 @@ async def handle_trigger_scan(request: web.Request) -> web.Response:
     days_val = int(body["days"]) if body.get("days") else None
     limit_val = int(body.get("limit", 50))
     dry_run = bool(body.get("dry_run", False))
+    provider = body.get("provider", "google_drive" if body.get("drive") else "google_photos")
+
+    if provider in ("google_drive", "drive") or body.get("drive"):
+        folder_id = body.get("folder_id")
+        try:
+            discovered = coordinator.scan_google_drive(
+                start_date=start_date,
+                end_date=end_date,
+                days=days_val,
+                folder_id=folder_id,
+                limit=limit_val,
+                dry_run=dry_run,
+            )
+            return web.json_response({
+                "success": True,
+                "scanned_count": len(discovered),
+                "mode": "google_drive",
+            })
+        except Exception as e:
+            logger.warning("Failed to scan Google Drive: %s", e)
+            return web.json_response({
+                "success": False,
+                "error": str(e),
+                "scanned_count": 0,
+                "mode": "google_drive",
+            })
 
     try:
         discovered = coordinator.scan_google_photos(

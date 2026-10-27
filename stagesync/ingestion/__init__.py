@@ -1,5 +1,6 @@
 """Ingestion layer for StageSync."""
 
+from stagesync.ingestion.google_drive import GoogleDriveClient
 from stagesync.ingestion.google_photos import GooglePhotosClient
 from stagesync.ingestion.metadata_parser import (
     MetadataParser,
@@ -9,6 +10,7 @@ from stagesync.ingestion.metadata_parser import (
 )
 
 __all__ = [
+    "GoogleDriveClient",
     "GooglePhotosClient",
     "MetadataParser",
     "ParsedVideoMetadata",

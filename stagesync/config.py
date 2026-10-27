@@ -87,6 +87,41 @@ class Settings(BaseModel):
         ).expanduser()
     )
 
+    # Google Drive Integration
+    google_drive_client_id: Optional[str] = Field(
+        default_factory=lambda: os.getenv(
+            "GOOGLE_DRIVE_CLIENT_ID",
+            os.getenv("GOOGLE_PHOTOS_CLIENT_ID", os.getenv("YOUTUBE_CLIENT_ID")),
+        )
+    )
+    google_drive_client_secret: Optional[str] = Field(
+        default_factory=lambda: os.getenv(
+            "GOOGLE_DRIVE_CLIENT_SECRET",
+            os.getenv("GOOGLE_PHOTOS_CLIENT_SECRET", os.getenv("YOUTUBE_CLIENT_SECRET")),
+        )
+    )
+    google_drive_redirect_uri: str = Field(
+        default_factory=lambda: os.getenv(
+            "GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8090/drive_callback"
+        )
+    )
+    google_drive_credentials_path: Path = Field(
+        default_factory=lambda: Path(
+            os.getenv(
+                "GOOGLE_DRIVE_CREDENTIALS_PATH",
+                str(_resolve_default_config_dir() / "google_drive_credentials.json"),
+            )
+        ).expanduser()
+    )
+    google_drive_token_path: Path = Field(
+        default_factory=lambda: Path(
+            os.getenv(
+                "GOOGLE_DRIVE_TOKEN_PATH",
+                str(_resolve_default_config_dir() / "google_drive_token.json"),
+            )
+        ).expanduser()
+    )
+
     # YouTube Data API v3 Integration
     youtube_client_id: Optional[str] = Field(
         default_factory=lambda: os.getenv("YOUTUBE_CLIENT_ID")

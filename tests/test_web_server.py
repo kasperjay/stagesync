@@ -48,6 +48,7 @@ class TestWebServer(AioHTTPTestCase):
         self.mock_db.list_videos.return_value = [fake_video]
         self.mock_db.get_todays_upload_count.return_value = 1
         self.mock_coord.photos_client.is_authenticated.return_value = True
+        self.mock_coord.drive_client.is_authenticated.return_value = True
         self.mock_coord.uploader.auth.is_authenticated.return_value = False
 
         resp = await self.client.get("/api/status")
@@ -56,6 +57,7 @@ class TestWebServer(AioHTTPTestCase):
         self.assertEqual(data["total_videos"], 1)
         self.assertEqual(data["uploads_today"], 1)
         self.assertTrue(data["services"]["google_photos"]["authenticated"])
+        self.assertTrue(data["services"]["google_drive"]["authenticated"])
         self.assertFalse(data["services"]["youtube"]["authenticated"])
 
     async def test_approve_video_endpoint(self):
@@ -115,6 +117,19 @@ class TestWebServer(AioHTTPTestCase):
         self.assertEqual(data["scanned_count"], 1)
         self.assertEqual(data["mode"], "local_directory")
         self.mock_coord.scan_local_directory.assert_called_once_with("/tmp/videos")
+
+    async def test_scan_google_drive_endpoint(self):
+        """Verify /api/scan with provider=google_drive calls scan_google_drive."""
+        fake_video = Video(source_photo_id="drive_1", filename="drive_clip.mp4")
+        self.mock_coord.scan_google_drive.return_value = [fake_video]
+
+        resp = await self.client.post("/api/scan", json={"provider": "google_drive", "days": 30})
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["scanned_count"], 1)
+        self.assertEqual(data["mode"], "google_drive")
+        self.mock_coord.scan_google_drive.assert_called_once()
 
     async def test_scan_google_photos_scope_error_handling(self):
         """Verify 403 insufficient scopes error returns transparent diagnostics."""
