@@ -103,7 +103,7 @@ class TestCLI(unittest.TestCase):
             force=False,
         )
         cmd_auth(args)
-        mock_exchange.assert_called_once_with("mock_oauth_code", "http://localhost:8090/youtube_callback")
+        mock_exchange.assert_called_once_with("mock_oauth_code", "http://localhost:8090/drive_callback")
 
 
 if __name__ == "__main__":

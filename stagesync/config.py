@@ -103,7 +103,7 @@ class Settings(BaseModel):
     google_drive_redirect_uri: str = Field(
         default_factory=lambda: os.getenv(
             "GOOGLE_DRIVE_REDIRECT_URI",
-            os.getenv("YOUTUBE_REDIRECT_URI", "http://localhost:8090/youtube_callback"),
+            "http://localhost:8090/drive_callback",
         )
     )
     google_drive_credentials_path: Path = Field(
