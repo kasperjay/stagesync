@@ -111,17 +111,32 @@ class PipelineCoordinator:
 
     def scan_google_photos(
         self,
-        days: Optional[int] = 30,
+        start_date: Optional[Union[datetime.date, datetime.datetime, str]] = None,
+        end_date: Optional[Union[datetime.date, datetime.datetime, str]] = None,
+        days: Optional[int] = None,
         album_id: Optional[str] = None,
         dry_run: bool = False,
         limit: int = 50,
     ) -> List[Video]:
-        """Scan Google Photos for video items and catalog new discoveries."""
-        logger.info("Scanning Google Photos (days=%s, album=%s, dry_run=%s)", days, album_id, dry_run)
+        """Scan Google Photos for video items matching date range/days and catalog new discoveries."""
+        logger.info(
+            "Scanning Google Photos (start_date=%s, end_date=%s, days=%s, album=%s, dry_run=%s)",
+            start_date,
+            end_date,
+            days,
+            album_id,
+            dry_run,
+        )
         discovered_videos: List[Video] = []
 
         try:
-            items, _ = self.photos_client.list_videos(days=days, album_id=album_id, page_size=limit)
+            items, _ = self.photos_client.list_videos(
+                start_date=start_date,
+                end_date=end_date,
+                days=days,
+                album_id=album_id,
+                page_size=limit,
+            )
         except Exception as e:
             logger.error("Failed to query Google Photos: %s", e)
             return discovered_videos

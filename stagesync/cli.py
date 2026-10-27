@@ -135,13 +135,25 @@ def cmd_scan(args: argparse.Namespace) -> None:
         return
 
     # Google Photos Scan
-    console.print(f"[bold cyan]Scanning Google Photos (Past {args.days} days)...[/bold cyan]")
+    date_info = []
+    if args.start_date:
+        date_info.append(f"from {args.start_date}")
+    if args.end_date:
+        date_info.append(f"to {args.end_date}")
+    if not date_info:
+        days_val = args.days if args.days is not None else 30
+        date_info.append(f"past {days_val} days")
+    date_desc = " ".join(date_info)
+
+    console.print(f"[bold cyan]Scanning Google Photos ({date_desc})...[/bold cyan]")
     if args.dry_run:
         console.print("[yellow]Running in DRY-RUN mode. Videos will be cataloged without downloading binaries.[/yellow]")
 
     with console.status("[bold green]Querying Google Photos Library API..."):
         videos = coordinator.scan_google_photos(
-            days=args.days,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            days=args.days if (not args.start_date and not args.end_date) else None,
             album_id=args.album,
             dry_run=args.dry_run,
             limit=args.limit,
@@ -437,14 +449,16 @@ def main() -> None:
 
     # serve / ui
     p_serve = subparsers.add_parser("serve", help="Launch local Web Dashboard")
-    p_serve.add_argument("--host", type=str, default="127.0.0.1", help="Host interface (default: 127.0.0.1)")
+    p_serve.add_argument("--host", type=str, default="0.0.0.0", help="Host interface (default: 0.0.0.0)")
     p_serve.add_argument("--port", type=int, default=8765, help="HTTP port (default: 8765)")
     p_serve.add_argument("--open-browser", action="store_true", help="Automatically open browser")
     p_serve.set_defaults(func=cmd_serve)
 
     # scan
     p_scan = subparsers.add_parser("scan", help="Scan Google Photos or local directory")
-    p_scan.add_argument("--days", type=int, default=30, help="Days back to scan in Google Photos")
+    p_scan.add_argument("--start-date", type=str, default=None, help="Start date (YYYY-MM-DD) for discovery")
+    p_scan.add_argument("--end-date", type=str, default=None, help="End date (YYYY-MM-DD) for discovery")
+    p_scan.add_argument("--days", type=int, default=None, help="Days back to scan in Google Photos (e.g. 30)")
     p_scan.add_argument("--album", type=str, default=None, help="Album ID filter")
     p_scan.add_argument("--dir", type=str, default=None, help="Local directory path to scan")
     p_scan.add_argument("--limit", type=int, default=50, help="Maximum items to scan")

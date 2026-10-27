@@ -25,6 +25,29 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 PHOTOS_READONLY_SCOPE = "https://www.googleapis.com/auth/photoslibrary.readonly"
 
 
+def _parse_date(date_val: Optional[Union[datetime.date, datetime.datetime, str]]) -> Optional[datetime.date]:
+    """Parse various date formats into standard datetime.date."""
+    if not date_val:
+        return None
+    if isinstance(date_val, datetime.datetime):
+        return date_val.date()
+    if isinstance(date_val, datetime.date):
+        return date_val
+    if isinstance(date_val, str):
+        clean_str = date_val.strip()
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d-%m-%Y"):
+            try:
+                return datetime.datetime.strptime(clean_str, fmt).date()
+            except ValueError:
+                continue
+        try:
+            from dateutil import parser
+            return parser.parse(clean_str).date()
+        except Exception:
+            pass
+    return None
+
+
 class GooglePhotosClient:
     """Client for Google Photos Library API."""
 
@@ -173,12 +196,14 @@ class GooglePhotosClient:
 
     def list_videos(
         self,
+        start_date: Optional[Union[datetime.date, datetime.datetime, str]] = None,
+        end_date: Optional[Union[datetime.date, datetime.datetime, str]] = None,
         days: Optional[int] = None,
         album_id: Optional[str] = None,
         page_size: int = 50,
         page_token: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-        """Query Google Photos for video items matching search criteria."""
+        """Query Google Photos for video items matching search criteria and date range."""
         access_token = self.get_access_token()
         headers = {
             "Authorization": f"Bearer {access_token}",
@@ -201,21 +226,33 @@ class GooglePhotosClient:
                     "mediaTypes": ["VIDEO"],
                 }
             }
-            if days:
-                now = datetime.datetime.now(datetime.timezone.utc)
-                start_dt = now - datetime.timedelta(days=days)
+
+            parsed_start = _parse_date(start_date)
+            parsed_end = _parse_date(end_date)
+
+            if not parsed_start and days:
+                now_date = datetime.datetime.now(datetime.timezone.utc).date()
+                parsed_start = now_date - datetime.timedelta(days=days)
+                if not parsed_end:
+                    parsed_end = now_date
+            elif parsed_start and not parsed_end:
+                parsed_end = datetime.datetime.now(datetime.timezone.utc).date()
+
+            if parsed_start and parsed_end:
+                if parsed_start > parsed_end:
+                    parsed_start, parsed_end = parsed_end, parsed_start
                 filters["dateFilter"] = {
                     "ranges": [
                         {
                             "startDate": {
-                                "year": start_dt.year,
-                                "month": start_dt.month,
-                                "day": start_dt.day,
+                                "year": parsed_start.year,
+                                "month": parsed_start.month,
+                                "day": parsed_start.day,
                             },
                             "endDate": {
-                                "year": now.year,
-                                "month": now.month,
-                                "day": now.day,
+                                "year": parsed_end.year,
+                                "month": parsed_end.month,
+                                "day": parsed_end.day,
                             },
                         }
                     ]

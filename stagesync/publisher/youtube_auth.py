@@ -36,10 +36,16 @@ class YouTubeAuth:
         settings = get_settings()
         self.credentials_path = credentials_path or settings.youtube_credentials_path
         self.token_path = token_path or settings.youtube_token_path
-        self.client_id = client_id or settings.youtube_client_id
-        self.client_secret = client_secret or settings.youtube_client_secret
+        self.client_id = client_id
+        self.client_secret = client_secret
 
-        self._load_credentials_from_file()
+        if credentials_path or not self.client_id:
+            self._load_credentials_from_file()
+
+        if self.client_id is None:
+            self.client_id = settings.youtube_client_id
+        if self.client_secret is None:
+            self.client_secret = settings.youtube_client_secret
 
     def _load_credentials_from_file(self) -> None:
         """Read client credentials from filesystem if available."""
@@ -54,10 +60,15 @@ class YouTubeAuth:
                     with p.open("r", encoding="utf-8") as f:
                         data = json.load(f)
                     installed = data.get("installed") or data.get("web") or data
-                    if not self.client_id:
-                        self.client_id = installed.get("client_id")
-                    if not self.client_secret:
-                        self.client_secret = installed.get("client_secret")
+                    cid = installed.get("client_id")
+                    csec = installed.get("client_secret")
+                    if cid:
+                        self.client_id = cid
+                    if csec:
+                        self.client_secret = csec
+                    break
+                except Exception as e:
+                    logger.debug("Could not read credentials from %s: %s", p, e)
                     break
                 except Exception as e:
                     logger.debug("Could not read YouTube credentials from %s: %s", p, e)

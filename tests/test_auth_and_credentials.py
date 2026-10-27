@@ -62,7 +62,7 @@ class TestAuthAndCredentials(unittest.TestCase):
         self.assertIn("youtube.upload", url)
 
     def test_youtube_auth_url_missing_client_id(self) -> None:
-        auth = YouTubeAuth(client_id=None, client_secret=None)
+        auth = YouTubeAuth(client_id="", client_secret="")
         with self.assertRaises(ValueError) as ctx:
             auth.get_authorization_url("http://localhost:8090/cb")
         self.assertIn("YouTube Client ID is not configured", str(ctx.exception))

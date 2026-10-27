@@ -66,7 +66,7 @@ HTML_PAGE = """<!DOCTYPE html>
       </div>
 
       <div class="flex items-center gap-2">
-        <button onclick="triggerAction('scan')" id="btn-scan" class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition flex items-center gap-1.5">
+        <button onclick="openScanModal()" id="btn-scan" class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition flex items-center gap-1.5">
           <span>📸</span> Scan Photos
         </button>
         <button onclick="triggerAction('process')" id="btn-process" class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition flex items-center gap-1.5">
@@ -163,6 +163,41 @@ HTML_PAGE = """<!DOCTYPE html>
         </table>
       </div>
     </section>
+
+    <!-- Scan Date Range Modal -->
+    <div id="scan-modal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6 max-w-md w-full space-y-4 shadow-xl">
+        <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+          <h3 class="font-bold text-base text-zinc-100 flex items-center gap-2">
+            <span>📸</span> Scan Google Photos
+          </h3>
+          <button onclick="closeScanModal()" class="text-zinc-500 hover:text-zinc-300 text-sm">✕</button>
+        </div>
+
+        <div class="space-y-3 text-xs">
+          <div>
+            <label class="block text-zinc-400 mb-1">Start Date</label>
+            <input type="date" id="scan-start-date" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
+          </div>
+          <div>
+            <label class="block text-zinc-400 mb-1">End Date</label>
+            <input type="date" id="scan-end-date" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
+          </div>
+          <div class="flex items-center gap-2 pt-1 text-zinc-400">
+            <span class="text-[11px]">Or quick scan past:</span>
+            <button type="button" onclick="setQuickDays(7)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">7d</button>
+            <button type="button" onclick="setQuickDays(30)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">30d</button>
+            <button type="button" onclick="setQuickDays(90)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">90d</button>
+            <button type="button" onclick="setQuickDays(365)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">1y</button>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-2 pt-3 border-t border-zinc-800">
+          <button onclick="closeScanModal()" class="px-3 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">Cancel</button>
+          <button onclick="executeScanWithDates()" id="btn-run-scan" class="px-4 py-1.5 text-xs font-medium rounded bg-blue-600 hover:bg-blue-500 text-white shadow-sm">Start Scan</button>
+        </div>
+      </div>
+    </div>
 
   </main>
 
@@ -379,6 +414,51 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
+    function openScanModal() {
+      document.getElementById('scan-modal').classList.remove('hidden');
+    }
+
+    function closeScanModal() {
+      document.getElementById('scan-modal').classList.add('hidden');
+    }
+
+    function setQuickDays(days) {
+      const end = new Date();
+      const start = new Date();
+      start.setDate(end.getDate() - days);
+      document.getElementById('scan-end-date').value = end.toISOString().split('T')[0];
+      document.getElementById('scan-start-date').value = start.toISOString().split('T')[0];
+    }
+
+    async function executeScanWithDates() {
+      const startDate = document.getElementById('scan-start-date').value;
+      const endDate = document.getElementById('scan-end-date').value;
+      const btn = document.getElementById('btn-run-scan');
+      const orig = btn.innerText;
+      btn.innerText = 'Scanning...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            start_date: startDate || undefined,
+            end_date: endDate || undefined
+          })
+        });
+        const data = await res.json();
+        closeScanModal();
+        await loadData();
+        alert(`Scan completed: Discovered ${data.scanned_count || 0} candidate video(s).`);
+      } catch (err) {
+        alert('Scan failed: ' + err);
+      } finally {
+        btn.innerText = orig;
+        btn.disabled = false;
+      }
+    }
+
     // Auto-refresh every 10 seconds
     loadData();
     setInterval(loadData, 10000);
@@ -570,10 +650,27 @@ async def handle_reject_video(request: web.Request) -> web.Response:
 
 
 async def handle_trigger_scan(request: web.Request) -> web.Response:
-    """Trigger Google Photos discovery scan."""
+    """Trigger Google Photos discovery scan with optional date range."""
     coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    body = {}
+    if request.can_read_body:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+    start_date = body.get("start_date")
+    end_date = body.get("end_date")
+    days_val = int(body["days"]) if body.get("days") else None
+    limit_val = int(body.get("limit", 50))
+
     try:
-        discovered = coordinator.scan_google_photos(limit=50)
+        discovered = coordinator.scan_google_photos(
+            start_date=start_date,
+            end_date=end_date,
+            days=days_val,
+            limit=limit_val,
+        )
         return web.json_response({"success": True, "scanned_count": len(discovered)})
     except Exception as e:
         logger.exception("Failed to scan Google Photos: %s", e)
@@ -606,7 +703,7 @@ async def handle_trigger_upload(request: web.Request) -> web.Response:
 
 
 def run_server(
-    host: str = "127.0.0.1",
+    host: str = "0.0.0.0",
     port: int = 8765,
     open_browser: bool = False,
 ) -> None:

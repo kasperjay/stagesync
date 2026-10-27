@@ -1,0 +1,14 @@
+{
+  "name": "stagesync",
+  "local_port": 8765,
+  "entrypoint": "/home/workspace/stagesync/bin/stagesync serve --host 0.0.0.0 --port 8765",
+  "publish": {
+    "label": "stagesync",
+    "type": "http",
+    "entrypoint": "/home/workspace/stagesync/bin/stagesync serve --host 0.0.0.0 --port 8765",
+    "published_port": 8765,
+    "env": {
+      "PORT": "8765"
+    }
+  }
+}
