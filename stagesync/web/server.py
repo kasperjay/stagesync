@@ -2,6 +2,8 @@
 
 Provides a modern, lightweight web interface to monitor video discovery,
 review identified concert footage, inspect setlists, and approve YouTube uploads.
+Redesigned with a Figma Task & Project Management Dashboard layout (Kanban boards,
+review triage queue, catalog data grid, and slide-over inspector drawer).
 Powered by aiohttp.web with zero node/npm build dependencies.
 """
 
@@ -31,323 +33,1032 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>StageSync | Concert Video & YouTube Archival</title>
+  <title>StageSync | Task & Project Management Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
       darkMode: 'class',
       theme: {
         extend: {
+          fontFamily: {
+            sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace']
+          },
           colors: {
-            brand: { 500: '#3b82f6', 600: '#2563eb' }
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              200: '#c7d2fe',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca'
+            },
+            canvas: '#090d16',
+            card: {
+              DEFAULT: '#111726',
+              hover: '#161f33',
+              subtle: '#0d1320'
+            },
+            border: {
+              DEFAULT: '#1e293b',
+              subtle: '#172033'
+            }
           }
         }
       }
     }
   </script>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     .tabular { font-variant-numeric: tabular-nums; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #090d16; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+    .drawer-overlay {
+      transition: opacity 0.25s ease-in-out;
+    }
+    .drawer-panel {
+      transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
   </style>
 </head>
-<body class="bg-zinc-950 text-zinc-100 min-h-screen antialiased flex flex-col">
+<body class="bg-canvas text-zinc-100 min-h-screen antialiased flex overflow-x-hidden selection:bg-brand-500 selection:text-white">
 
-  <!-- Header -->
-  <header class="border-b border-zinc-800 bg-zinc-900/60 backdrop-blur sticky top-0 z-50">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+  <!-- Desktop & Mobile Sidebar Navigation -->
+  <aside id="app-sidebar" class="w-64 bg-card border-r border-border flex flex-col fixed inset-y-0 left-0 z-40 transition-transform duration-200 -translate-x-full lg:translate-x-0">
+    
+    <!-- Workspace Brand Header -->
+    <div class="h-16 border-b border-border px-5 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <div class="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center font-bold text-white shadow-sm">
-          SS
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-brand-600 via-indigo-500 to-blue-500 flex items-center justify-center font-bold text-white shadow-md shadow-brand-500/20">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+          </svg>
         </div>
+        <div class="leading-tight">
+          <div class="font-bold text-sm tracking-tight text-white flex items-center gap-1.5">
+            StageSync
+            <span class="text-[10px] font-mono px-1.5 py-0.2 bg-brand-500/10 text-brand-400 border border-brand-500/20 rounded">PRO</span>
+          </div>
+          <div class="text-[11px] text-zinc-400">Task & Video Vault</div>
+        </div>
+      </div>
+      <button onclick="toggleSidebar()" class="lg:hidden text-zinc-400 hover:text-white p-1">
+        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+      </button>
+    </div>
+
+    <!-- Project Workspace Switcher Dropdown (Figma Style) -->
+    <div class="p-3">
+      <div class="bg-card-subtle border border-border rounded-xl p-2.5 flex items-center justify-between text-xs cursor-pointer hover:border-zinc-700 transition">
+        <div class="flex items-center gap-2 overflow-hidden">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50 flex-shrink-0"></span>
+          <span class="font-medium text-zinc-200 truncate">Live Concerts Vault</span>
+        </div>
+        <svg class="w-4 h-4 text-zinc-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4 4 4-4" />
+        </svg>
+      </div>
+    </div>
+
+    <!-- Navigation Menu Items -->
+    <div class="flex-1 px-3 py-2 space-y-6 overflow-y-auto">
+      <div>
+        <div class="px-3 pb-2 text-[10px] font-semibold text-zinc-400 tracking-wider uppercase">Project Views</div>
+        <nav class="space-y-1">
+          <button onclick="setTab('board')" id="nav-btn-board" class="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition text-zinc-300 hover:text-white hover:bg-zinc-800/50">
+            <div class="flex items-center gap-2.5">
+              <svg class="w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" /></svg>
+              <span>Kanban Board</span>
+            </div>
+            <span id="nav-count-board" class="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-zinc-800 text-zinc-400">0</span>
+          </button>
+
+          <button onclick="setTab('review')" id="nav-btn-review" class="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition text-zinc-300 hover:text-white hover:bg-zinc-800/50">
+            <div class="flex items-center gap-2.5">
+              <svg class="w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg>
+              <span>Review Queue</span>
+            </div>
+            <span id="nav-count-review" class="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">0</span>
+          </button>
+
+          <button onclick="setTab('catalog')" id="nav-btn-catalog" class="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition text-zinc-300 hover:text-white hover:bg-zinc-800/50">
+            <div class="flex items-center gap-2.5">
+              <svg class="w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+              <span>Video Catalog</span>
+            </div>
+            <span id="nav-count-catalog" class="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-zinc-800 text-zinc-400">0</span>
+          </button>
+
+          <button onclick="setTab('overview')" id="nav-btn-overview" class="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition text-zinc-300 hover:text-white hover:bg-zinc-800/50">
+            <div class="flex items-center gap-2.5">
+              <svg class="w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+              <span>Overview & KPIs</span>
+            </div>
+          </button>
+        </nav>
+      </div>
+
+      <div>
+        <div class="px-3 pb-2 text-[10px] font-semibold text-zinc-400 tracking-wider uppercase">Pipeline Sagas</div>
+        <div class="space-y-1">
+          <button onclick="openScanModal()" class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800/50 transition">
+            <svg class="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" /></svg>
+            <span>Scan Discovery</span>
+          </button>
+          <button onclick="triggerAction('process')" id="sidebar-btn-process" class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800/50 transition">
+            <svg class="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+            <span>Run AI Matcher</span>
+          </button>
+          <button onclick="triggerAction('upload')" id="sidebar-btn-upload" class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800/50 transition">
+            <svg class="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+            <span>Publish to YouTube</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar Bottom / Quota & Engine Stats -->
+    <div class="p-3 border-t border-border bg-card-subtle">
+      <div class="bg-canvas border border-border rounded-xl p-3 space-y-2">
+        <div class="flex items-center justify-between text-[11px]">
+          <span class="text-zinc-400 font-medium">Daily Upload Quota</span>
+          <span id="sidebar-quota-text" class="text-zinc-200 font-mono font-semibold tabular">0 / 5</span>
+        </div>
+        <div class="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+          <div id="sidebar-quota-bar" class="bg-gradient-to-r from-blue-500 to-indigo-500 h-1.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+        </div>
+        <div class="pt-1 flex items-center justify-between text-[10px] text-zinc-400 border-t border-border/40">
+          <span class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            SQLite WAL
+          </span>
+          <span class="font-mono">v0.1.0</span>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Mobile Backdrop -->
+  <button type="button" id="sidebar-backdrop" aria-label="Close sidebar navigation" onclick="toggleSidebar()" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 hidden lg:hidden w-full h-full border-0 cursor-default"></button>
+
+  <!-- Main Workspace Content Frame -->
+  <div class="lg:pl-64 flex flex-col flex-1 min-w-0">
+
+    <!-- Top Action & Navigation Bar -->
+    <header class="h-16 border-b border-border bg-canvas/90 backdrop-blur sticky top-0 z-20 px-4 sm:px-6 flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <button onclick="toggleSidebar()" class="lg:hidden text-zinc-400 hover:text-white p-1 rounded-md hover:bg-zinc-800">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
+        </button>
         <div>
-          <span class="font-bold text-lg tracking-tight">StageSync</span>
-          <span class="text-xs text-zinc-400 ml-2 border border-zinc-700 px-2 py-0.5 rounded">v0.1.0</span>
+          <div class="flex items-center gap-2 text-xs text-zinc-400">
+            <span>Workspaces</span>
+            <span>/</span>
+            <span>StageSync</span>
+            <span>/</span>
+            <span id="breadcrumb-active-view" class="text-zinc-200 font-medium">Kanban Board</span>
+          </div>
+          <h1 id="page-title" class="text-sm sm:text-base font-bold text-white tracking-tight flex items-center gap-2">
+            Task Management Pipeline
+          </h1>
         </div>
       </div>
 
+      <!-- Center Live Filter / Search Input -->
+      <div class="hidden md:flex items-center flex-1 max-w-md mx-4">
+        <div class="relative w-full">
+          <span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-400">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+          </span>
+          <input type="text" id="global-search" oninput="onSearchInput(this.value)" placeholder="Search track, artist, venue, or filename (Press '/' or ⌘K)..." class="w-full bg-card border border-border rounded-xl pl-9 pr-12 py-1.5 text-xs text-zinc-200 placeholder-zinc-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:border-brand-500 transition">
+          <span class="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-[10px] text-zinc-400 font-mono">
+            ⌘K
+          </span>
+        </div>
+      </div>
+
+      <!-- Action Button Toolbar -->
       <div class="flex items-center gap-2">
-        <button onclick="openScanModal()" id="btn-scan" class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition flex items-center gap-1.5">
-          <span>📸</span> Scan Photos
+        <button onclick="loadData()" title="Refresh Data" class="p-2 rounded-xl bg-card border border-border hover:bg-card-hover text-zinc-300 transition">
+          <svg id="refresh-icon" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
         </button>
-        <button onclick="triggerAction('process')" id="btn-process" class="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition flex items-center gap-1.5">
-          <span>🧠</span> Process AI
+
+        <button onclick="openScanModal()" class="px-3 py-1.5 text-xs font-semibold rounded-xl bg-card border border-border hover:bg-card-hover text-zinc-200 shadow-sm transition flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+          <span>Scan Media</span>
         </button>
-        <button onclick="triggerAction('upload')" id="btn-upload" class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 hover:bg-blue-500 text-white shadow-sm transition flex items-center gap-1.5">
-          <span>🚀</span> Upload Approved
+
+        <button onclick="triggerAction('upload')" id="top-btn-upload" class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+          <span>Publish (<span id="top-approved-count">0</span>)</span>
         </button>
+      </div>
+    </header>
+
+    <!-- Sub-Header: Active Tab Switcher & Status Filter Bar -->
+    <div class="border-b border-border bg-card/40 px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+      <!-- View Mode Buttons -->
+      <div class="flex items-center gap-1 bg-canvas p-1 rounded-xl border border-border">
+        <button onclick="setTab('board')" id="tab-btn-board" class="px-3 py-1 rounded-lg font-medium transition flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" /></svg>
+          Board
+        </button>
+        <button onclick="setTab('review')" id="tab-btn-review" class="px-3 py-1 rounded-lg font-medium transition flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg>
+          Review Queue (<span id="tab-count-review">0</span>)
+        </button>
+        <button onclick="setTab('catalog')" id="tab-btn-catalog" class="px-3 py-1 rounded-lg font-medium transition flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+          Catalog Table (<span id="tab-count-catalog">0</span>)
+        </button>
+        <button onclick="setTab('overview')" id="tab-btn-overview" class="px-3 py-1 rounded-lg font-medium transition flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+          Overview
+        </button>
+      </div>
+
+      <!-- Quick Filter Pills -->
+      <div class="flex items-center gap-1.5 overflow-x-auto py-1">
+        <span class="text-[11px] text-zinc-400 mr-1">Filter:</span>
+        <button onclick="setStatusFilter('ALL')" id="filter-btn-ALL" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium transition bg-zinc-800 text-white border-zinc-700">All</button>
+        <button onclick="setStatusFilter('PENDING_REVIEW')" id="filter-btn-PENDING_REVIEW" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium transition bg-card border-border text-zinc-400 hover:text-zinc-200">Needs Review</button>
+        <button onclick="setStatusFilter('APPROVED')" id="filter-btn-APPROVED" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium transition bg-card border-border text-zinc-400 hover:text-zinc-200">Approved</button>
+        <button onclick="setStatusFilter('PUBLISHED')" id="filter-btn-PUBLISHED" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium transition bg-card border-border text-zinc-400 hover:text-zinc-200">Published</button>
+        <button onclick="setStatusFilter('HIGH_CONF')" id="filter-btn-HIGH_CONF" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium transition bg-card border-border text-zinc-400 hover:text-zinc-200">High Conf (≥90%)</button>
       </div>
     </div>
-  </header>
 
-  <!-- Main Container -->
-  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full space-y-6">
+    <!-- Main Workspace Container -->
+    <main class="flex-1 p-4 sm:p-6 overflow-y-auto space-y-6">
 
-    <!-- Metrics Grid -->
-    <section class="grid grid-cols-2 md:grid-cols-4 gap-4" id="stats-grid">
-      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-        <div class="text-xs font-medium text-zinc-400">Total Cataloged</div>
-        <div class="text-2xl font-bold tabular mt-1" id="stat-total">0</div>
-      </div>
-      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-        <div class="text-xs font-medium text-yellow-400">Pending Review</div>
-        <div class="text-2xl font-bold tabular text-yellow-400 mt-1" id="stat-pending">0</div>
-      </div>
-      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-        <div class="text-xs font-medium text-blue-400">Approved for Upload</div>
-        <div class="text-2xl font-bold tabular text-blue-400 mt-1" id="stat-approved">0</div>
-      </div>
-      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-        <div class="text-xs font-medium text-emerald-400">Published to YouTube</div>
-        <div class="text-2xl font-bold tabular text-emerald-400 mt-1" id="stat-published">0</div>
-      </div>
-    </section>
+      <!-- ============================================================= -->
+      <!-- VIEW 1: KANBAN BOARD VIEW                                     -->
+      <!-- ============================================================= -->
+      <section id="view-board" class="space-y-4">
+        <!-- 4-Column Pipeline Kanban -->
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 items-start">
 
-    <!-- Quota & Auth Notification Banner -->
-    <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4 text-xs">
-      <div class="flex items-center gap-4 flex-wrap">
-        <div class="flex items-center gap-1.5">
-          <span class="w-2 h-2 rounded-full" id="dot-drive"></span>
-          <span class="text-zinc-300 font-medium">Google Drive:</span>
-          <span id="text-drive" class="text-zinc-400">Checking...</span>
-        </div>
-        <div class="flex items-center gap-1.5">
-          <span class="w-2 h-2 rounded-full" id="dot-photos"></span>
-          <span class="text-zinc-300 font-medium">Google Photos:</span>
-          <span id="text-photos" class="text-zinc-400">Checking...</span>
-        </div>
-        <div class="flex items-center gap-1.5">
-          <span class="w-2 h-2 rounded-full" id="dot-yt"></span>
-          <span class="text-zinc-300 font-medium">YouTube API:</span>
-          <span id="text-yt" class="text-zinc-400">Checking...</span>
-        </div>
-        <div class="flex items-center gap-1.5">
-          <span class="w-2 h-2 rounded-full" id="dot-setlist"></span>
-          <span class="text-zinc-300 font-medium">Setlist.fm:</span>
-          <span id="text-setlist" class="text-zinc-400">Checking...</span>
-        </div>
-      </div>
-      <div class="text-zinc-400 tabular" id="text-quota">
-        Daily Quota: 0 / 5 uploads today
-      </div>
-    </section>
-
-    <!-- Tabs Navigation -->
-    <div class="border-b border-zinc-800 flex gap-4">
-      <button onclick="setTab('review')" id="tab-btn-review" class="py-2.5 px-3 text-sm font-semibold border-b-2 border-blue-500 text-blue-400">
-        Review Queue (<span id="tab-count-review">0</span>)
-      </button>
-      <button onclick="setTab('catalog')" id="tab-btn-catalog" class="py-2.5 px-3 text-sm font-semibold border-b-2 border-transparent text-zinc-400 hover:text-zinc-200">
-        Full Catalog (<span id="tab-count-catalog">0</span>)
-      </button>
-    </div>
-
-    <!-- Review Queue View -->
-    <section id="view-review" class="space-y-4">
-      <div id="review-list" class="grid grid-cols-1 gap-4">
-        <div class="text-center py-12 text-zinc-500 text-sm">Loading queue...</div>
-      </div>
-    </section>
-
-    <!-- Full Catalog View -->
-    <section id="view-catalog" class="hidden">
-      <div class="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
-        <table class="w-full text-left text-xs">
-          <thead class="bg-zinc-800/50 text-zinc-400 uppercase font-medium border-b border-zinc-800">
-            <tr>
-              <th class="px-4 py-3">File / Date</th>
-              <th class="px-4 py-3">Artist & Song</th>
-              <th class="px-4 py-3">Venue / City</th>
-              <th class="px-4 py-3">Confidence</th>
-              <th class="px-4 py-3">Status</th>
-              <th class="px-4 py-3 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody id="catalog-table-body" class="divide-y divide-zinc-800/60 font-mono">
-            <tr><td colspan="6" class="text-center py-8 text-zinc-500 font-sans">No videos cataloged yet.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- Unified Scan Modal -->
-    <div id="scan-modal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6 max-w-lg w-full space-y-4 shadow-xl">
-        <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
-          <div class="flex items-center gap-3">
-            <h3 class="font-bold text-base text-zinc-100 flex items-center gap-2">
-              <span>🔍</span> Discovery Scan
-            </h3>
-            <div class="flex bg-zinc-950 p-0.5 rounded border border-zinc-800 text-xs">
-              <button type="button" id="scan-tab-btn-drive" onclick="setScanMode('drive')" class="px-2.5 py-1 rounded bg-zinc-800 text-zinc-200 font-medium">Google Drive</button>
-              <button type="button" id="scan-tab-btn-photos" onclick="setScanMode('photos')" class="px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium">Google Photos</button>
-              <button type="button" id="scan-tab-btn-local" onclick="setScanMode('local')" class="px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium">Local Folder</button>
+          <!-- Column 1: Discovered -->
+          <div class="bg-card/70 border border-border rounded-2xl flex flex-col max-h-[calc(100vh-190px)]">
+            <div class="p-3.5 border-b border-border flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-zinc-500"></span>
+                <span class="font-bold text-xs uppercase tracking-wider text-zinc-300">Discovered</span>
+              </div>
+              <span id="board-count-discovered" class="text-xs font-mono px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 tabular font-semibold">0</span>
+            </div>
+            <div id="board-col-discovered" class="p-3 space-y-3 overflow-y-auto flex-1 min-h-[140px]">
+              <!-- Cards injected via JS -->
             </div>
           </div>
-          <button onclick="closeScanModal()" class="text-zinc-500 hover:text-zinc-300 text-sm">✕</button>
+
+          <!-- Column 2: Pending Review -->
+          <div class="bg-card/70 border border-border rounded-2xl flex flex-col max-h-[calc(100vh-190px)]">
+            <div class="p-3.5 border-b border-border flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+                <span class="font-bold text-xs uppercase tracking-wider text-amber-300">Review Needed</span>
+              </div>
+              <span id="board-count-review" class="text-xs font-mono px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 tabular font-semibold">0</span>
+            </div>
+            <div id="board-col-review" class="p-3 space-y-3 overflow-y-auto flex-1 min-h-[140px]">
+              <!-- Cards injected via JS -->
+            </div>
+          </div>
+
+          <!-- Column 3: Approved (Queued for Upload) -->
+          <div class="bg-card/70 border border-border rounded-2xl flex flex-col max-h-[calc(100vh-190px)]">
+            <div class="p-3.5 border-b border-border flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
+                <span class="font-bold text-xs uppercase tracking-wider text-indigo-300">Approved & Queued</span>
+              </div>
+              <span id="board-count-approved" class="text-xs font-mono px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 tabular font-semibold">0</span>
+            </div>
+            <div id="board-col-approved" class="p-3 space-y-3 overflow-y-auto flex-1 min-h-[140px]">
+              <!-- Cards injected via JS -->
+            </div>
+          </div>
+
+          <!-- Column 4: Published to YouTube -->
+          <div class="bg-card/70 border border-border rounded-2xl flex flex-col max-h-[calc(100vh-190px)]">
+            <div class="p-3.5 border-b border-border flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                <span class="font-bold text-xs uppercase tracking-wider text-emerald-300">Published</span>
+              </div>
+              <span id="board-count-published" class="text-xs font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 tabular font-semibold">0</span>
+            </div>
+            <div id="board-col-published" class="p-3 space-y-3 overflow-y-auto flex-1 min-h-[140px]">
+              <!-- Cards injected via JS -->
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ============================================================= -->
+      <!-- VIEW 2: REVIEW QUEUE (TRIAGE CARDS)                           -->
+      <!-- ============================================================= -->
+      <section id="view-review" class="hidden space-y-4">
+        <div id="review-list" class="grid grid-cols-1 gap-4">
+          <div class="text-center py-16 text-zinc-400 text-sm">Loading review queue...</div>
+        </div>
+      </section>
+
+      <!-- ============================================================= -->
+      <!-- VIEW 3: FULL CATALOG (DATA TABLE)                             -->
+      <!-- ============================================================= -->
+      <section id="view-catalog" class="hidden space-y-4">
+        <div class="bg-card border border-border rounded-2xl overflow-hidden shadow-lg">
+          <div class="px-5 py-3.5 border-b border-border flex items-center justify-between text-xs">
+            <span class="font-semibold text-zinc-300">Video Master Inventory</span>
+            <span class="text-zinc-400 font-mono" id="catalog-count-label">0 items</span>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-card-subtle text-zinc-400 uppercase font-semibold border-b border-border text-[11px] tracking-wider">
+                <tr>
+                  <th class="px-5 py-3">Video File</th>
+                  <th class="px-5 py-3">Artist & Track</th>
+                  <th class="px-5 py-3">Venue / Location</th>
+                  <th class="px-5 py-3">Confidence</th>
+                  <th class="px-5 py-3">Status</th>
+                  <th class="px-5 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="catalog-table-body" class="divide-y divide-border/60">
+                <tr><td colspan="6" class="text-center py-12 text-zinc-400">Loading catalog...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================= -->
+      <!-- VIEW 4: SYSTEM OVERVIEW & KPIS                                -->
+      <!-- ============================================================= -->
+      <section id="view-overview" class="hidden space-y-6">
+        <!-- 4 Metric KPI Cards -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div class="bg-card border border-border rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-zinc-700 transition">
+            <div class="flex items-center justify-between text-zinc-400 text-xs font-medium">
+              <span>Total Cataloged</span>
+              <span class="p-1.5 rounded-lg bg-zinc-800 text-zinc-300">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+              </span>
+            </div>
+            <div class="text-3xl font-extrabold tabular text-white mt-2" id="stat-total">0</div>
+            <div class="text-[11px] text-zinc-400 mt-1 flex items-center gap-1">
+              <span>All discovered concert footage</span>
+            </div>
+          </div>
+
+          <div class="bg-card border border-border rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-amber-500/40 transition">
+            <div class="flex items-center justify-between text-amber-400 text-xs font-medium">
+              <span>Pending Review</span>
+              <span class="p-1.5 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+              </span>
+            </div>
+            <div class="text-3xl font-extrabold tabular text-amber-400 mt-2" id="stat-pending">0</div>
+            <div class="text-[11px] text-zinc-400 mt-1">Awaiting verification triage</div>
+          </div>
+
+          <div class="bg-card border border-border rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-indigo-500/40 transition">
+            <div class="flex items-center justify-between text-indigo-400 text-xs font-medium">
+              <span>Approved & Queued</span>
+              <span class="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+              </span>
+            </div>
+            <div class="text-3xl font-extrabold tabular text-indigo-400 mt-2" id="stat-approved">0</div>
+            <div class="text-[11px] text-zinc-400 mt-1">Ready for YouTube pipeline</div>
+          </div>
+
+          <div class="bg-card border border-border rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-emerald-500/40 transition">
+            <div class="flex items-center justify-between text-emerald-400 text-xs font-medium">
+              <span>Published Live</span>
+              <span class="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+              </span>
+            </div>
+            <div class="text-3xl font-extrabold tabular text-emerald-400 mt-2" id="stat-published">0</div>
+            <div class="text-[11px] text-zinc-400 mt-1">Active on YouTube channel</div>
+          </div>
         </div>
 
-        <!-- Notification / Error Box -->
-        <div id="scan-feedback-box" class="hidden text-xs"></div>
-
-        <!-- Mode: Google Drive (Recommended) -->
-        <div id="scan-mode-drive" class="space-y-3 text-xs">
-          <div class="bg-blue-950/30 border border-blue-900/40 rounded p-2.5 text-[11px] text-blue-200">
-            <span>⚡ Google Drive API supports full video search & date filtering without deprecation blocks.</span>
-          </div>
-          <div>
-            <label class="block text-zinc-400 mb-1">Start Date</label>
-            <input type="date" id="scan-drive-start-date" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
-          </div>
-          <div>
-            <label class="block text-zinc-400 mb-1">End Date</label>
-            <input type="date" id="scan-drive-end-date" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
-          </div>
-          <div>
-            <label class="block text-zinc-400 mb-1">Drive Folder ID (Optional)</label>
-            <input type="text" id="scan-drive-folder" placeholder="Leave blank to scan entire Drive" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
-          </div>
-          <div class="flex items-center justify-between pt-1 text-zinc-400">
-            <div class="flex items-center gap-1.5">
-              <span class="text-[11px]">Presets:</span>
-              <button type="button" onclick="setQuickDriveDays(7)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">7d</button>
-              <button type="button" onclick="setQuickDriveDays(30)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">30d</button>
-              <button type="button" onclick="setQuickDriveDays(90)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">90d</button>
-              <button type="button" onclick="setQuickDriveDays(365)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">1y</button>
+        <!-- Integration Status Cards -->
+        <div class="bg-card border border-border rounded-2xl p-5 space-y-4">
+          <div class="flex items-center justify-between border-b border-border pb-3">
+            <div>
+              <h3 class="font-bold text-sm text-zinc-100 flex items-center gap-2">
+                <svg class="w-4 h-4 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                Cloud Services & API Integrations Health
+              </h3>
+              <p class="text-xs text-zinc-400 mt-0.5">Real-time status of storage, intelligence, and publication endpoints</p>
             </div>
-            <label class="flex items-center gap-1.5 cursor-pointer">
-              <input type="checkbox" id="scan-drive-dry-run" class="rounded bg-zinc-950 border-zinc-800 text-blue-600">
-              <span class="text-[11px]">Dry Run</span>
-            </label>
+            <span class="text-xs font-mono text-zinc-400" id="text-quota">Daily Quota: 0 / 5</span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+            <!-- Google Drive -->
+            <div class="bg-canvas border border-border rounded-xl p-3 space-y-1.5">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold text-zinc-200">Google Drive</span>
+                <span class="w-2 h-2 rounded-full" id="dot-drive"></span>
+              </div>
+              <div id="text-drive" class="text-xs text-zinc-400">Checking...</div>
+              <div class="text-[10px] text-zinc-400">Full date & folder search</div>
+            </div>
+
+            <!-- Google Photos -->
+            <div class="bg-canvas border border-border rounded-xl p-3 space-y-1.5">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold text-zinc-200">Google Photos</span>
+                <span class="w-2 h-2 rounded-full" id="dot-photos"></span>
+              </div>
+              <div id="text-photos" class="text-xs text-zinc-400">Checking...</div>
+              <div class="text-[10px] text-zinc-400">Library & Picker API</div>
+            </div>
+
+            <!-- YouTube Data API -->
+            <div class="bg-canvas border border-border rounded-xl p-3 space-y-1.5">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold text-zinc-200">YouTube v3</span>
+                <span class="w-2 h-2 rounded-full" id="dot-yt"></span>
+              </div>
+              <div id="text-yt" class="text-xs text-zinc-400">Checking...</div>
+              <div class="text-[10px] text-zinc-400">Resumable chunk uploader</div>
+            </div>
+
+            <!-- Setlist.fm -->
+            <div class="bg-canvas border border-border rounded-xl p-3 space-y-1.5">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold text-zinc-200">Setlist.fm API</span>
+                <span class="w-2 h-2 rounded-full" id="dot-setlist"></span>
+              </div>
+              <div id="text-setlist" class="text-xs text-zinc-400">Checking...</div>
+              <div class="text-[10px] text-zinc-400">Tour & setlist discovery</div>
+            </div>
+
+            <!-- Gemini 2.5 Audio -->
+            <div class="bg-canvas border border-border rounded-xl p-3 space-y-1.5">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold text-zinc-200">Gemini Audio</span>
+                <span class="w-2 h-2 rounded-full" id="dot-gemini"></span>
+              </div>
+              <div id="text-gemini" class="text-xs text-zinc-400">Checking...</div>
+              <div class="text-[10px] text-zinc-400">Live acoustic reasoning</div>
+            </div>
           </div>
         </div>
 
-        <!-- Mode: Google Photos -->
-        <div id="scan-mode-photos" class="hidden space-y-3 text-xs">
+        <!-- Quick Automation Actions Bar -->
+        <div class="bg-card border border-border rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <label class="block text-zinc-400 mb-1">Start Date</label>
-            <input type="date" id="scan-start-date" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
+            <div class="font-bold text-sm text-zinc-200">Autonomous Pipeline Actions</div>
+            <div class="text-xs text-zinc-400 mt-0.5">Execute batch operations across your video repository</div>
           </div>
-          <div>
-            <label class="block text-zinc-400 mb-1">End Date</label>
-            <input type="date" id="scan-end-date" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
-          </div>
-          <div class="flex items-center justify-between pt-1 text-zinc-400">
-            <div class="flex items-center gap-1.5">
-              <span class="text-[11px]">Presets:</span>
-              <button type="button" onclick="setQuickDays(7)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">7d</button>
-              <button type="button" onclick="setQuickDays(30)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">30d</button>
-              <button type="button" onclick="setQuickDays(90)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">90d</button>
-              <button type="button" onclick="setQuickDays(365)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">1y</button>
-            </div>
-            <label class="flex items-center gap-1.5 cursor-pointer">
-              <input type="checkbox" id="scan-dry-run" class="rounded bg-zinc-950 border-zinc-800 text-blue-600">
-              <span class="text-[11px]">Dry Run</span>
-            </label>
-          </div>
-
-          <div class="pt-2 border-t border-zinc-800/60 flex items-center justify-between">
-            <span class="text-[11px] text-zinc-500">Or select directly in Google Photos:</span>
-            <button type="button" onclick="launchPickerSession()" id="btn-picker-launch" class="px-2.5 py-1 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-blue-400 border border-blue-900/50">
-              Launch Photos Picker ↗
+          <div class="flex items-center gap-2">
+            <button onclick="openScanModal()" class="px-3.5 py-2 text-xs font-semibold rounded-xl bg-card-subtle hover:bg-zinc-800 text-zinc-200 border border-border transition flex items-center gap-2">
+              <svg class="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" /></svg>
+              <span>Scan Media Sources</span>
+            </button>
+            <button onclick="triggerAction('process')" id="btn-process-action" class="px-3.5 py-2 text-xs font-semibold rounded-xl bg-card-subtle hover:bg-zinc-800 text-zinc-200 border border-border transition flex items-center gap-2">
+              <svg class="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+              <span>Process Pending Clips</span>
+            </button>
+            <button onclick="triggerAction('upload')" id="btn-upload-action" class="px-4 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition flex items-center gap-2">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+              <span>Publish Approved to YouTube</span>
             </button>
           </div>
         </div>
+      </section>
 
-        <!-- Mode: Local Directory -->
-        <div id="scan-mode-local" class="hidden space-y-3 text-xs">
+    </main>
+  </div>
+
+  <!-- ================================================================= -->
+  <!-- SLIDE-OVER TASK INSPECTOR DRAWER (Figma Detail Panel)            -->
+  <!-- ================================================================= -->
+  <div id="drawer-container" class="fixed inset-0 z-50 pointer-events-none">
+    <!-- Backdrop -->
+    <button type="button" id="drawer-backdrop" aria-label="Close task inspector" onclick="closeDrawer()" class="drawer-overlay fixed inset-0 bg-black/60 backdrop-blur-xs opacity-0 pointer-events-none transition-opacity duration-200 w-full h-full border-0 cursor-default"></button>
+    
+    <!-- Drawer Panel -->
+    <aside id="drawer-panel" class="drawer-panel fixed inset-y-0 right-0 max-w-xl w-full bg-card border-l border-border shadow-2xl flex flex-col pointer-events-auto transform translate-x-full">
+      <!-- Drawer Header -->
+      <div class="h-16 border-b border-border px-6 flex items-center justify-between bg-card-subtle">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-brand-500/10 border border-brand-500/20 flex items-center justify-center text-brand-400">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+          </div>
           <div>
-            <label class="block text-zinc-400 mb-1">Local Directory Path</label>
-            <input type="text" id="scan-local-dir" placeholder="/home/workspace/concert_videos" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
-            <p class="text-[11px] text-zinc-500 mt-1">Point to any folder containing concert video files (.mp4, .mov, .m4v).</p>
+            <h2 id="drawer-filename" class="text-sm font-bold text-white font-mono truncate max-w-xs sm:max-w-md">video.mp4</h2>
+            <div class="text-[11px] text-zinc-400 flex items-center gap-2">
+              <span id="drawer-status-badge" class="px-2 py-0.5 rounded text-[10px] font-semibold uppercase">STATUS</span>
+              <span>•</span>
+              <span id="drawer-id-label" class="font-mono text-zinc-400">ID: v_xxx</span>
+            </div>
+          </div>
+        </div>
+        <button onclick="closeDrawer()" class="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+
+      <!-- Drawer Body -->
+      <div class="flex-1 overflow-y-auto p-6 space-y-6 text-xs">
+
+        <!-- AI Match Hero Card -->
+        <div class="bg-gradient-to-br from-indigo-950/40 via-card-subtle to-canvas border border-indigo-900/40 rounded-2xl p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-[10px] font-bold tracking-wider uppercase text-indigo-400 flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+              Identified Track & Artist
+            </span>
+            <span id="drawer-confidence-pill" class="px-2 py-0.5 rounded-full font-mono font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 text-[10px]">95% Match</span>
+          </div>
+
+          <div>
+            <h3 id="drawer-artist-name" class="text-lg font-bold text-white tracking-tight">Artist Name</h3>
+            <div id="drawer-song-title" class="text-base text-brand-400 font-semibold mt-0.5">Song Title</div>
+          </div>
+
+          <!-- Confidence Meter Bar -->
+          <div class="space-y-1 pt-1">
+            <div class="flex justify-between text-[10px] text-zinc-400 font-mono">
+              <span>Match Confidence</span>
+              <span id="drawer-confidence-text" class="text-zinc-300 font-bold">95.0%</span>
+            </div>
+            <div class="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+              <div id="drawer-confidence-bar" class="bg-emerald-500 h-1.5 rounded-full transition-all duration-300" style="width: 95%"></div>
+            </div>
           </div>
         </div>
 
-        <div class="flex items-center justify-end gap-2 pt-3 border-t border-zinc-800">
-          <button onclick="closeScanModal()" class="px-3 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">Close</button>
-          <button onclick="executeScan()" id="btn-run-scan" class="px-4 py-1.5 text-xs font-medium rounded bg-blue-600 hover:bg-blue-500 text-white shadow-sm">Start Scan</button>
+        <!-- Venue & Concert Metadata -->
+        <div class="bg-card-subtle border border-border rounded-2xl p-4 space-y-3">
+          <div class="text-[10px] font-bold tracking-wider uppercase text-zinc-400 flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            Live Show & Venue Details
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div class="bg-canvas p-2.5 rounded-xl border border-border">
+              <span class="text-zinc-400 block text-[10px]">Venue</span>
+              <span id="drawer-venue-name" class="font-semibold text-zinc-200 mt-0.5 block truncate">Red Rocks Amphitheatre</span>
+              <span id="drawer-venue-city" class="text-zinc-400 block text-[10px] truncate">Morrison, CO</span>
+            </div>
+            <div class="bg-canvas p-2.5 rounded-xl border border-border">
+              <span class="text-zinc-400 block text-[10px]">Event Date</span>
+              <span id="drawer-concert-date" class="font-semibold text-zinc-200 mt-0.5 block">2024-08-15</span>
+              <span id="drawer-tour-name" class="text-zinc-400 block text-[10px] truncate">World Tour</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Video Technical Specs -->
+        <div class="bg-card-subtle border border-border rounded-2xl p-4 space-y-3">
+          <div class="text-[10px] font-bold tracking-wider uppercase text-zinc-400">Media Specifications</div>
+          <div class="grid grid-cols-3 gap-2 font-mono text-[11px]">
+            <div class="bg-canvas p-2.5 rounded-xl border border-border">
+              <span class="text-zinc-400 block text-[10px] font-sans">Duration</span>
+              <span id="drawer-duration" class="font-semibold text-zinc-200">45s</span>
+            </div>
+            <div class="bg-canvas p-2.5 rounded-xl border border-border">
+              <span class="text-zinc-400 block text-[10px] font-sans">Resolution</span>
+              <span id="drawer-resolution" class="font-semibold text-zinc-200">1920x1080</span>
+            </div>
+            <div class="bg-canvas p-2.5 rounded-xl border border-border">
+              <span class="text-zinc-400 block text-[10px] font-sans">Recorded UTC</span>
+              <span id="drawer-recorded-time" class="font-semibold text-zinc-200 truncate block">2024-08-15</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- YouTube Publishing Settings (Editable) -->
+        <div class="bg-card-subtle border border-border rounded-2xl p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-[10px] font-bold tracking-wider uppercase text-zinc-400 flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 text-red-500" fill="currentColor" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+              YouTube Publication Configuration
+            </span>
+            <span class="text-[10px] text-zinc-400">Custom Title & Privacy</span>
+          </div>
+
+          <div class="space-y-3">
+            <div>
+              <label class="block text-zinc-400 mb-1 text-[11px] font-medium">Video Title Override</label>
+              <input type="text" id="drawer-title-input" class="w-full bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:border-brand-500 text-xs">
+            </div>
+
+            <div>
+              <label class="block text-zinc-400 mb-1 text-[11px] font-medium">Privacy Status</label>
+              <select id="drawer-privacy-input" class="w-full bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:border-brand-500 text-xs">
+                <option value="PUBLIC">PUBLIC (Everyone can see and search)</option>
+                <option value="UNLISTED" selected>UNLISTED (Anyone with the link can view)</option>
+                <option value="PRIVATE">PRIVATE (Only authenticated creator can view)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Drawer Footer Actions -->
+      <div class="p-4 border-t border-border bg-card-subtle flex items-center justify-end gap-2.5">
+        <button onclick="handleDrawerReject()" id="drawer-btn-reject" class="px-4 py-2 text-xs font-semibold rounded-xl bg-card border border-border hover:bg-rose-950/40 hover:text-rose-300 hover:border-rose-800 text-zinc-300 transition">
+          Reject Candidate
+        </button>
+        <button onclick="handleDrawerApprove()" id="drawer-btn-approve" class="px-5 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition">
+          Approve & Queue Upload
+        </button>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ================================================================= -->
+  <!-- MODAL: SCAN & DISCOVERY                                           -->
+  <!-- ================================================================= -->
+  <div id="scan-modal" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-card border border-border rounded-2xl p-6 max-w-lg w-full space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-border pb-3">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" /></svg>
+          </div>
+          <div>
+            <h3 class="font-bold text-sm text-zinc-100">Media Discovery Scan</h3>
+            <p class="text-[11px] text-zinc-400">Search and ingest concert footage into the pipeline</p>
+          </div>
+        </div>
+        <button onclick="closeScanModal()" class="text-zinc-400 hover:text-white p-1">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+
+      <!-- Mode Selector Tabs -->
+      <div class="flex bg-canvas p-1 rounded-xl border border-border text-xs">
+        <button type="button" id="scan-tab-btn-drive" onclick="setScanMode('drive')" class="flex-1 py-1.5 rounded-lg bg-zinc-800 text-zinc-200 font-semibold transition">Google Drive</button>
+        <button type="button" id="scan-tab-btn-photos" onclick="setScanMode('photos')" class="flex-1 py-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 font-semibold transition">Google Photos</button>
+        <button type="button" id="scan-tab-btn-local" onclick="setScanMode('local')" class="flex-1 py-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 font-semibold transition">Local Directory</button>
+      </div>
+
+      <!-- Feedback / Error Notice -->
+      <div id="scan-feedback-box" class="hidden text-xs"></div>
+
+      <!-- Mode: Google Drive -->
+      <div id="scan-mode-drive" class="space-y-3 text-xs">
+        <div class="bg-indigo-950/30 border border-indigo-900/40 rounded-xl p-3 text-[11px] text-indigo-200">
+          <span>⚡ Google Drive API supports full video search & date filtering without deprecation blocks.</span>
+        </div>
+        <div>
+          <label class="block text-zinc-400 mb-1">Start Date</label>
+          <input type="date" id="scan-drive-start-date" class="w-full bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 font-mono">
+        </div>
+        <div>
+          <label class="block text-zinc-400 mb-1">End Date</label>
+          <input type="date" id="scan-drive-end-date" class="w-full bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 font-mono">
+        </div>
+        <div>
+          <label class="block text-zinc-400 mb-1">Drive Folder ID (Optional)</label>
+          <input type="text" id="scan-drive-folder" placeholder="Leave blank to scan entire Drive" class="w-full bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 font-mono">
+        </div>
+        <div class="flex items-center justify-between pt-1 text-zinc-400">
+          <div class="flex items-center gap-1.5">
+            <span class="text-[11px]">Presets:</span>
+            <button type="button" onclick="setQuickDriveDays(7)" class="px-2 py-0.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-[10px]">7d</button>
+            <button type="button" onclick="setQuickDriveDays(30)" class="px-2 py-0.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-[10px]">30d</button>
+            <button type="button" onclick="setQuickDriveDays(90)" class="px-2 py-0.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-[10px]">90d</button>
+            <button type="button" onclick="setQuickDriveDays(365)" class="px-2 py-0.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-[10px]">1y</button>
+          </div>
+          <label class="flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" id="scan-drive-dry-run" class="rounded bg-canvas border-border text-brand-500">
+            <span class="text-[11px]">Dry Run</span>
+          </label>
         </div>
       </div>
-    </div>
 
-  </main>
+      <!-- Mode: Google Photos -->
+      <div id="scan-mode-photos" class="hidden space-y-3 text-xs">
+        <div>
+          <label class="block text-zinc-400 mb-1">Start Date</label>
+          <input type="date" id="scan-start-date" class="w-full bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 font-mono">
+        </div>
+        <div>
+          <label class="block text-zinc-400 mb-1">End Date</label>
+          <input type="date" id="scan-end-date" class="w-full bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 font-mono">
+        </div>
+        <div class="flex items-center justify-between pt-1 text-zinc-400">
+          <div class="flex items-center gap-1.5">
+            <span class="text-[11px]">Presets:</span>
+            <button type="button" onclick="setQuickDays(7)" class="px-2 py-0.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-[10px]">7d</button>
+            <button type="button" onclick="setQuickDays(30)" class="px-2 py-0.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-[10px]">30d</button>
+            <button type="button" onclick="setQuickDays(90)" class="px-2 py-0.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-[10px]">90d</button>
+            <button type="button" onclick="setQuickDays(365)" class="px-2 py-0.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-[10px]">1y</button>
+          </div>
+          <label class="flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" id="scan-dry-run" class="rounded bg-canvas border-border text-brand-500">
+            <span class="text-[11px]">Dry Run</span>
+          </label>
+        </div>
+
+        <div class="pt-2 border-t border-border flex items-center justify-between">
+          <span class="text-[11px] text-zinc-400">Or select directly in Photos Picker:</span>
+          <button type="button" onclick="launchPickerSession()" id="btn-picker-launch" class="px-3 py-1.5 text-xs rounded-xl bg-card hover:bg-zinc-800 text-brand-400 border border-brand-500/30 transition">
+            Launch Photos Picker ↗
+          </button>
+        </div>
+      </div>
+
+      <!-- Mode: Local Directory -->
+      <div id="scan-mode-local" class="hidden space-y-3 text-xs">
+        <div>
+          <label class="block text-zinc-400 mb-1">Local Directory Path</label>
+          <input type="text" id="scan-local-dir" placeholder="/home/workspace/concert_videos" class="w-full bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 font-mono">
+          <p class="text-[11px] text-zinc-400 mt-1">Scan any folder containing concert video files (.mp4, .mov, .m4v).</p>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-border">
+        <button onclick="closeScanModal()" class="px-4 py-2 text-xs rounded-xl bg-card hover:bg-zinc-800 text-zinc-300 transition">Cancel</button>
+        <button onclick="executeScan()" id="btn-run-scan" class="px-5 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition">Start Discovery</button>
+      </div>
+    </div>
+  </div>
 
   <script>
-    let activeTab = 'review';
+    let activeTab = 'board';
+    let activeStatusFilter = 'ALL';
+    let searchQuery = '';
     let videosData = [];
+    let statusData = {};
+    let activeSelectedVideo = null;
 
     async function loadData() {
+      const refreshIcon = document.getElementById('refresh-icon');
+      if (refreshIcon) refreshIcon.classList.add('animate-spin');
+
       try {
         const [resStatus, resVideos] = await Promise.all([
           fetch('/api/status').then(r => r.json()),
           fetch('/api/videos').then(r => r.json())
         ]);
 
-        // Render Stats
-        document.getElementById('stat-total').innerText = resStatus.total_videos;
-        document.getElementById('stat-pending').innerText = resStatus.status_counts.PENDING_REVIEW || 0;
-        document.getElementById('stat-approved').innerText = resStatus.status_counts.APPROVED || 0;
-        document.getElementById('stat-published').innerText = resStatus.status_counts.PUBLISHED || 0;
-        document.getElementById('tab-count-review').innerText = resStatus.status_counts.PENDING_REVIEW || 0;
-        document.getElementById('tab-count-catalog').innerText = resStatus.total_videos;
-        document.getElementById('text-quota').innerText = `Daily Quota: ${resStatus.uploads_today} / ${resStatus.max_daily_uploads} uploads used`;
+        statusData = resStatus;
+        videosData = resVideos.videos || [];
 
-        // Render Integrations
-        updateDot('dot-drive', 'text-drive', resStatus.services.google_drive?.authenticated);
-        updateDot('dot-photos', 'text-photos', resStatus.services.google_photos.authenticated);
-        updateDot('dot-yt', 'text-yt', resStatus.services.youtube.authenticated);
-        updateDot('dot-setlist', 'text-setlist', resStatus.services.setlist_fm.has_key);
+        // Update Statistics
+        const total = statusData.total_videos || 0;
+        const pending = statusData.status_counts.PENDING_REVIEW || 0;
+        const approved = statusData.status_counts.APPROVED || 0;
+        const published = statusData.status_counts.PUBLISHED || 0;
 
-        videosData = resVideos.videos;
-        renderReviewQueue();
-        renderCatalog();
+        document.getElementById('stat-total').innerText = total;
+        document.getElementById('stat-pending').innerText = pending;
+        document.getElementById('stat-approved').innerText = approved;
+        document.getElementById('stat-published').innerText = published;
+
+        // Nav counts
+        document.getElementById('nav-count-board').innerText = total;
+        document.getElementById('nav-count-review').innerText = pending;
+        document.getElementById('nav-count-catalog').innerText = total;
+        document.getElementById('tab-count-review').innerText = pending;
+        document.getElementById('tab-count-catalog').innerText = total;
+        document.getElementById('top-approved-count').innerText = approved;
+
+        // Quota meters
+        const used = statusData.uploads_today || 0;
+        const maxQ = statusData.max_daily_uploads || 5;
+        const pct = Math.min(100, Math.round((used / maxQ) * 100));
+        document.getElementById('sidebar-quota-text').innerText = `${used} / ${maxQ}`;
+        document.getElementById('sidebar-quota-bar').style.width = `${pct}%`;
+        document.getElementById('text-quota').innerText = `Daily Quota: ${used} / ${maxQ} uploads used`;
+
+        // Services health indicators
+        updateDot('dot-drive', 'text-drive', statusData.services.google_drive?.authenticated);
+        updateDot('dot-photos', 'text-photos', statusData.services.google_photos?.authenticated);
+        updateDot('dot-yt', 'text-yt', statusData.services.youtube?.authenticated);
+        updateDot('dot-setlist', 'text-setlist', statusData.services.setlist_fm?.has_key);
+        updateDot('dot-gemini', 'text-gemini', statusData.services.gemini_audio?.has_key);
+
+        renderCurrentView();
       } catch (err) {
         console.error('Failed to load status', err);
+      } finally {
+        if (refreshIcon) refreshIcon.classList.remove('animate-spin');
       }
     }
 
     function updateDot(dotId, textId, isActive) {
       const dot = document.getElementById(dotId);
       const text = document.getElementById(textId);
+      if (!dot || !text) return;
+
       if (isActive) {
         dot.className = 'w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50';
         text.innerText = 'Connected';
-        text.className = 'text-emerald-400 font-medium';
+        text.className = 'text-emerald-400 font-semibold text-xs';
       } else {
         dot.className = 'w-2 h-2 rounded-full bg-zinc-600';
         text.innerText = 'Not Configured';
-        text.className = 'text-zinc-500';
+        text.className = 'text-zinc-500 text-xs';
       }
     }
 
     function setTab(tab) {
       activeTab = tab;
-      const btnReview = document.getElementById('tab-btn-review');
-      const btnCatalog = document.getElementById('tab-btn-catalog');
-      const viewReview = document.getElementById('view-review');
-      const viewCatalog = document.getElementById('view-catalog');
+      const views = ['board', 'review', 'catalog', 'overview'];
+      const viewNames = {
+        'board': 'Kanban Board',
+        'review': 'Review Queue',
+        'catalog': 'Video Catalog',
+        'overview': 'Overview & KPIs'
+      };
 
-      if (tab === 'review') {
-        btnReview.className = 'py-2.5 px-3 text-sm font-semibold border-b-2 border-blue-500 text-blue-400';
-        btnCatalog.className = 'py-2.5 px-3 text-sm font-semibold border-b-2 border-transparent text-zinc-400 hover:text-zinc-200';
-        viewReview.classList.remove('hidden');
-        viewCatalog.classList.add('hidden');
-      } else {
-        btnCatalog.className = 'py-2.5 px-3 text-sm font-semibold border-b-2 border-blue-500 text-blue-400';
-        btnReview.className = 'py-2.5 px-3 text-sm font-semibold border-b-2 border-transparent text-zinc-400 hover:text-zinc-200';
-        viewCatalog.classList.remove('hidden');
-        viewReview.classList.add('hidden');
+      views.forEach(v => {
+        const sec = document.getElementById(`view-${v}`);
+        const navBtn = document.getElementById(`nav-btn-${v}`);
+        const tabBtn = document.getElementById(`tab-btn-${v}`);
+
+        if (v === tab) {
+          if (sec) sec.classList.remove('hidden');
+          if (navBtn) navBtn.className = 'w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold bg-brand-500/10 text-brand-300 border border-brand-500/20';
+          if (tabBtn) tabBtn.className = 'px-3 py-1 rounded-lg font-semibold bg-brand-600 text-white shadow-sm flex items-center gap-1.5';
+        } else {
+          if (sec) sec.classList.add('hidden');
+          if (navBtn) navBtn.className = 'w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800/50 transition';
+          if (tabBtn) tabBtn.className = 'px-3 py-1 rounded-lg font-medium text-zinc-400 hover:text-zinc-200 transition flex items-center gap-1.5';
+        }
+      });
+
+      document.getElementById('breadcrumb-active-view').innerText = viewNames[tab] || tab;
+      document.getElementById('page-title').innerText = viewNames[tab] || 'Task Management Pipeline';
+
+      renderCurrentView();
+    }
+
+    function setStatusFilter(filter) {
+      activeStatusFilter = filter;
+      const filters = ['ALL', 'PENDING_REVIEW', 'APPROVED', 'PUBLISHED', 'HIGH_CONF'];
+      filters.forEach(f => {
+        const btn = document.getElementById(`filter-btn-${f}`);
+        if (!btn) return;
+        if (f === filter) {
+          btn.className = 'px-2.5 py-1 rounded-lg border text-[11px] font-semibold bg-zinc-800 text-white border-zinc-600 shadow-xs';
+        } else {
+          btn.className = 'px-2.5 py-1 rounded-lg border text-[11px] font-medium bg-card border-border text-zinc-400 hover:text-zinc-200 transition';
+        }
+      });
+      renderCurrentView();
+    }
+
+    function onSearchInput(val) {
+      searchQuery = (val || '').toLowerCase().trim();
+      renderCurrentView();
+    }
+
+    function getFilteredVideos() {
+      return videosData.filter(v => {
+        const c = v.concert || {};
+        const ident = v.identification || {};
+        const artist = (ident.detected_artist || c.headliner_artist || '').toLowerCase();
+        const song = (ident.detected_song_title || '').toLowerCase();
+        const venue = (v.venue ? `${v.venue.name} ${v.venue.city}` : '').toLowerCase();
+        const fname = (v.filename || '').toLowerCase();
+        const conf = ident.match_confidence || 0;
+
+        // Search text filter
+        if (searchQuery) {
+          const matched = artist.includes(searchQuery) ||
+                          song.includes(searchQuery) ||
+                          venue.includes(searchQuery) ||
+                          fname.includes(searchQuery) ||
+                          v.id.includes(searchQuery);
+          if (!matched) return false;
+        }
+
+        // Status pill filter
+        if (activeStatusFilter === 'ALL') return true;
+        if (activeStatusFilter === 'HIGH_CONF') return conf >= 0.90;
+        return v.processing_status === activeStatusFilter;
+      });
+    }
+
+    function renderCurrentView() {
+      if (activeTab === 'board') renderBoard();
+      else if (activeTab === 'review') renderReviewQueue();
+      else if (activeTab === 'catalog') renderCatalog();
+    }
+
+    function renderBoard() {
+      const filtered = getFilteredVideos();
+
+      // Group into 4 columns
+      const cols = {
+        discovered: [],
+        review: [],
+        approved: [],
+        published: []
+      };
+
+      filtered.forEach(v => {
+        if (v.processing_status === 'PENDING_REVIEW') cols.review.push(v);
+        else if (v.processing_status === 'APPROVED') cols.approved.push(v);
+        else if (v.processing_status === 'PUBLISHED') cols.published.push(v);
+        else cols.discovered.push(v);
+      });
+
+      document.getElementById('board-count-discovered').innerText = cols.discovered.length;
+      document.getElementById('board-count-review').innerText = cols.review.length;
+      document.getElementById('board-count-approved').innerText = cols.approved.length;
+      document.getElementById('board-count-published').innerText = cols.published.length;
+
+      document.getElementById('board-col-discovered').innerHTML = renderColumnCards(cols.discovered, 'discovered');
+      document.getElementById('board-col-review').innerHTML = renderColumnCards(cols.review, 'review');
+      document.getElementById('board-col-approved').innerHTML = renderColumnCards(cols.approved, 'approved');
+      document.getElementById('board-col-published').innerHTML = renderColumnCards(cols.published, 'published');
+    }
+
+    function renderColumnCards(videos, colKey) {
+      if (videos.length === 0) {
+        return `<div class="p-6 text-center text-zinc-400 text-xs border border-dashed border-border/70 rounded-xl">No tasks in this lane</div>`;
       }
+
+      return videos.map(v => {
+        const c = v.concert || {};
+        const ident = v.identification || {};
+        const artist = ident.detected_artist || c.headliner_artist || 'Unknown Artist';
+        const song = ident.detected_song_title || 'Unidentified Clip';
+        const venue = v.venue ? `${v.venue.name}, ${v.venue.city}` : 'No venue detected';
+        const conf = ident.match_confidence ? Math.round(ident.match_confidence * 100) : 0;
+        const dur = Math.round(v.duration_seconds || 0);
+
+        let confBadge = `<span class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-400">Score: ${conf}%</span>`;
+        if (conf >= 80) {
+          confBadge = `<span class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold">${conf}% Match</span>`;
+        } else if (conf >= 50) {
+          confBadge = `<span class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20 font-semibold">${conf}% Match</span>`;
+        }
+
+        return `
+          <div class="bg-card border border-border rounded-xl p-3.5 hover:border-brand-500/50 hover:shadow-lg hover:shadow-brand-500/5 transition space-y-2.5 group">
+            <button type="button" onclick="openDrawer('${v.id}')" class="w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded-lg space-y-2.5 block">
+              <div class="flex items-center justify-between text-[11px]">
+                <span class="font-mono text-zinc-400 truncate max-w-[130px]">${v.filename}</span>
+                <span class="font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[10px]">${dur}s • ${v.height || 'HD'}p</span>
+              </div>
+
+              <div>
+                <div class="font-bold text-xs text-zinc-100 group-hover:text-brand-300 transition line-clamp-1">${artist}</div>
+                <div class="text-xs text-brand-400 font-medium line-clamp-1">${song}</div>
+              </div>
+
+              <div class="text-[11px] text-zinc-400 flex items-center gap-1.5 truncate">
+                <svg class="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /></svg>
+                <span class="truncate">${venue}</span>
+              </div>
+            </button>
+
+            <div class="pt-2 border-t border-border/50 flex items-center justify-between">
+              ${confBadge}
+              ${colKey === 'review' ? `
+                <button type="button" onclick="quickApprove('${v.id}')" class="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-brand-600 hover:bg-brand-500 text-white transition">
+                  Approve ✓
+                </button>
+              ` : `
+                <button type="button" onclick="openDrawer('${v.id}')" class="text-[10px] text-zinc-400 hover:text-white transition">Inspect →</button>
+              `}
+            </div>
+          </div>
+        `;
+      }).join('');
     }
 
     function renderReviewQueue() {
-      const pending = videosData.filter(v => v.processing_status === 'PENDING_REVIEW');
       const container = document.getElementById('review-list');
+      const pending = getFilteredVideos().filter(v => v.processing_status === 'PENDING_REVIEW');
+
       if (pending.length === 0) {
         container.innerHTML = `
-          <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-8 text-center">
-            <div class="text-3xl mb-2">🎉</div>
-            <div class="font-medium text-zinc-300">Review queue is empty!</div>
-            <div class="text-xs text-zinc-500 mt-1">Scan Google Photos or run intelligence processing to identify new clips.</div>
+          <div class="bg-card border border-border rounded-2xl p-12 text-center max-w-lg mx-auto space-y-3">
+            <div class="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto">
+              <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+            </div>
+            <h3 class="font-bold text-base text-zinc-100">Review Queue is Empty!</h3>
+            <p class="text-xs text-zinc-400 leading-relaxed">All candidate videos have been triaged. Ingest new footage or run the AI matcher to identify additional tracks.</p>
+            <div class="pt-2 flex justify-center gap-2">
+              <button onclick="openScanModal()" class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-card border border-border hover:bg-zinc-800 text-zinc-200">Scan Media</button>
+              <button onclick="triggerAction('process')" class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-brand-600 hover:bg-brand-500 text-white">Run AI Processing</button>
+            </div>
           </div>
         `;
         return;
@@ -356,55 +1067,61 @@ HTML_PAGE = """<!DOCTYPE html>
       container.innerHTML = pending.map(v => {
         const c = v.concert || {};
         const ident = v.identification || {};
-        const conf = ident.match_confidence ? (ident.match_confidence * 100).toFixed(0) + '%' : 'N/A';
+        const conf = ident.match_confidence ? Math.round(ident.match_confidence * 100) : 0;
         const artist = ident.detected_artist || c.headliner_artist || 'Unknown Artist';
         const song = ident.detected_song_title || 'Live Performance';
         const venue = v.venue ? `${v.venue.name}, ${v.venue.city}` : 'Unknown Venue';
         const date = c.event_date || (v.recorded_at_utc ? v.recorded_at_utc.substring(0, 10) : 'Unknown Date');
 
         return `
-          <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-700 transition space-y-4">
-            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/60 pb-3">
-              <div>
-                <span class="text-xs font-mono text-zinc-500">${v.filename}</span>
+          <div class="bg-card border border-border rounded-2xl p-5 hover:border-zinc-700 transition space-y-4 shadow-sm">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3.5">
+              <button type="button" class="text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded-lg p-1 -m-1" onclick="openDrawer('${v.id}')">
+                <span class="text-xs font-mono text-zinc-400">${v.filename}</span>
                 <h3 class="text-base font-bold text-zinc-100 flex items-center gap-2 mt-0.5">
-                  <span>${artist}</span>
-                  <span class="text-zinc-500 font-normal">—</span>
-                  <span class="text-blue-400">${song}</span>
+                  <span class="hover:text-brand-300 transition">${artist}</span>
+                  <span class="text-zinc-400 font-normal">—</span>
+                  <span class="text-brand-400 font-semibold">${song}</span>
                 </h3>
-              </div>
+              </button>
               <div class="flex items-center gap-2">
-                <span class="text-xs px-2.5 py-1 rounded bg-zinc-800 text-zinc-300 border border-zinc-700 font-mono">
-                  Score: ${conf}
+                <span class="text-xs px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-semibold">
+                  ${conf}% Match
                 </span>
-                <span class="text-xs px-2.5 py-1 rounded bg-yellow-950 text-yellow-300 border border-yellow-800">
+                <span class="text-xs px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 font-semibold">
                   Pending Review
                 </span>
               </div>
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-              <div class="bg-zinc-950/60 p-2.5 rounded border border-zinc-800">
-                <span class="text-zinc-500 block">Venue & City</span>
-                <span class="font-medium text-zinc-200 mt-0.5 block">${venue}</span>
+              <div class="bg-canvas p-3 rounded-xl border border-border">
+                <span class="text-zinc-400 block text-[10px] uppercase font-semibold">Venue & Location</span>
+                <span class="font-medium text-zinc-200 mt-0.5 block truncate">${venue}</span>
               </div>
-              <div class="bg-zinc-950/60 p-2.5 rounded border border-zinc-800">
-                <span class="text-zinc-500 block">Date & Tour</span>
-                <span class="font-medium text-zinc-200 mt-0.5 block">${date} ${c.tour_name ? '(' + c.tour_name + ')' : ''}</span>
+              <div class="bg-canvas p-3 rounded-xl border border-border">
+                <span class="text-zinc-400 block text-[10px] uppercase font-semibold">Show Date & Tour</span>
+                <span class="font-medium text-zinc-200 mt-0.5 block truncate">${date} ${c.tour_name ? '(' + c.tour_name + ')' : ''}</span>
               </div>
-              <div class="bg-zinc-950/60 p-2.5 rounded border border-zinc-800">
-                <span class="text-zinc-500 block">Duration & Resolution</span>
-                <span class="font-medium text-zinc-200 mt-0.5 block font-mono">${v.duration_seconds.toFixed(0)}s • ${v.width}x${v.height}</span>
+              <div class="bg-canvas p-3 rounded-xl border border-border font-mono">
+                <span class="text-zinc-400 block text-[10px] font-sans uppercase font-semibold">Video Specs</span>
+                <span class="font-medium text-zinc-200 mt-0.5 block">${Math.round(v.duration_seconds || 0)}s • ${v.width}x${v.height}</span>
               </div>
             </div>
 
-            <div class="flex items-center justify-end gap-2 pt-2">
-              <button onclick="rejectVideo('${v.id}')" class="px-3 py-1.5 text-xs font-medium rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition">
-                Reject
+            <div class="flex items-center justify-between pt-2">
+              <button onclick="openDrawer('${v.id}')" class="text-xs text-zinc-400 hover:text-brand-300 flex items-center gap-1">
+                <span>View Full Metadata & Setlist</span>
+                <span>→</span>
               </button>
-              <button onclick="approveVideo('${v.id}')" class="px-4 py-1.5 text-xs font-medium rounded bg-blue-600 hover:bg-blue-500 text-white shadow-sm transition">
-                Approve & Queue Upload
-              </button>
+              <div class="flex items-center gap-2">
+                <button onclick="rejectVideo('${v.id}')" class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-card-subtle hover:bg-rose-950/40 hover:text-rose-300 hover:border-rose-800 border border-border transition">
+                  Reject
+                </button>
+                <button onclick="quickApprove('${v.id}')" class="px-4 py-1.5 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition">
+                  Approve & Queue Upload
+                </button>
+              </div>
             </div>
           </div>
         `;
@@ -413,45 +1130,149 @@ HTML_PAGE = """<!DOCTYPE html>
 
     function renderCatalog() {
       const tbody = document.getElementById('catalog-table-body');
-      if (videosData.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-8 text-zinc-500 font-sans">No videos cataloged yet.</td></tr>';
+      const filtered = getFilteredVideos();
+      document.getElementById('catalog-count-label').innerText = `${filtered.length} of ${videosData.length} videos`;
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-12 text-zinc-400 font-sans">No matching videos in catalog.</td></tr>';
         return;
       }
 
-      tbody.innerHTML = videosData.map(v => {
+      tbody.innerHTML = filtered.map(v => {
         const c = v.concert || {};
         const ident = v.identification || {};
         const artist = ident.detected_artist || c.headliner_artist || '—';
         const song = ident.detected_song_title || '—';
         const venue = v.venue ? `${v.venue.name}` : '—';
-        const conf = ident.match_confidence ? (ident.match_confidence * 100).toFixed(0) + '%' : '—';
+        const conf = ident.match_confidence ? Math.round(ident.match_confidence * 100) + '%' : '—';
 
-        let badgeClass = 'bg-zinc-800 text-zinc-400';
-        if (v.processing_status === 'APPROVED') badgeClass = 'bg-blue-950 text-blue-300 border border-blue-800';
-        if (v.processing_status === 'PUBLISHED') badgeClass = 'bg-emerald-950 text-emerald-300 border border-emerald-800';
-        if (v.processing_status === 'REJECTED') badgeClass = 'bg-rose-950 text-rose-300 border border-rose-800';
-        if (v.processing_status === 'PENDING_REVIEW') badgeClass = 'bg-yellow-950 text-yellow-300 border border-yellow-800';
+        let badgeClass = 'bg-zinc-800 text-zinc-400 border-zinc-700';
+        if (v.processing_status === 'APPROVED') badgeClass = 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30';
+        if (v.processing_status === 'PUBLISHED') badgeClass = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30';
+        if (v.processing_status === 'REJECTED') badgeClass = 'bg-rose-500/10 text-rose-400 border-rose-500/30';
+        if (v.processing_status === 'PENDING_REVIEW') badgeClass = 'bg-amber-500/10 text-amber-400 border-amber-500/30';
 
         return `
-          <tr class="hover:bg-zinc-800/30 transition">
-            <td class="px-4 py-3 font-mono">${v.filename}<div class="text-[10px] text-zinc-500 font-sans">${v.recorded_at_utc ? v.recorded_at_utc.substring(0, 10) : '—'}</div></td>
-            <td class="px-4 py-3 font-sans font-medium text-zinc-200">${artist} <div class="text-xs text-blue-400 font-normal">${song}</div></td>
-            <td class="px-4 py-3 font-sans text-zinc-300">${venue}</td>
-            <td class="px-4 py-3 font-mono text-zinc-400">${conf}</td>
-            <td class="px-4 py-3"><span class="px-2 py-0.5 rounded text-[10px] font-sans font-medium ${badgeClass}">${v.processing_status}</span></td>
-            <td class="px-4 py-3 text-right font-sans">
-              ${v.processing_status === 'PENDING_REVIEW' ? `
-                <button onclick="approveVideo('${v.id}')" class="text-blue-400 hover:text-blue-300 font-medium">Approve</button>
-              ` : '—'}
+          <tr onclick="openDrawer('${v.id}')" class="hover:bg-card-hover/60 transition cursor-pointer">
+            <td class="px-5 py-3.5 font-mono text-zinc-300">
+              <div class="truncate max-w-[160px]">${v.filename}</div>
+              <div class="text-[10px] text-zinc-400 font-sans">${v.recorded_at_utc ? v.recorded_at_utc.substring(0, 10) : '—'}</div>
+            </td>
+            <td class="px-5 py-3.5 font-medium text-zinc-200">
+              <div class="font-semibold text-white truncate max-w-[200px]">${artist}</div>
+              <div class="text-[11px] text-brand-400 font-normal truncate max-w-[200px]">${song}</div>
+            </td>
+            <td class="px-5 py-3.5 text-zinc-300 truncate max-w-[160px]">${venue}</td>
+            <td class="px-5 py-3.5 font-mono text-zinc-300 font-semibold">${conf}</td>
+            <td class="px-5 py-3.5">
+              <span class="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border ${badgeClass}">
+                ${v.processing_status}
+              </span>
+            </td>
+            <td class="px-5 py-3.5 text-right font-sans" onclick="event.stopPropagation()">
+              <button onclick="openDrawer('${v.id}')" class="text-xs font-semibold text-zinc-400 hover:text-white px-2 py-1 rounded hover:bg-zinc-800 transition">
+                Inspect
+              </button>
             </td>
           </tr>
         `;
       }).join('');
     }
 
-    async function approveVideo(id) {
+    // =================================================================
+    // SLIDE-OVER DRAWER ACTIONS
+    // =================================================================
+    function openDrawer(id) {
+      const v = videosData.find(item => item.id === id);
+      if (!v) return;
+
+      activeSelectedVideo = v;
+      const c = v.concert || {};
+      const ident = v.identification || {};
+      const venue = v.venue || {};
+
+      document.getElementById('drawer-filename').innerText = v.filename || 'Unknown file';
+      document.getElementById('drawer-id-label').innerText = `ID: ${v.id.substring(0, 8)}...`;
+      
+      const badge = document.getElementById('drawer-status-badge');
+      badge.innerText = v.processing_status;
+      badge.className = `px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+        v.processing_status === 'APPROVED' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/30' :
+        v.processing_status === 'PUBLISHED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' :
+        v.processing_status === 'REJECTED' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30' :
+        'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+      }`;
+
+      // AI Match
+      const artist = ident.detected_artist || c.headliner_artist || 'Unknown Artist';
+      const song = ident.detected_song_title || 'Live Performance';
+      const conf = ident.match_confidence ? Math.round(ident.match_confidence * 100) : 0;
+
+      document.getElementById('drawer-artist-name').innerText = artist;
+      document.getElementById('drawer-song-title').innerText = song;
+      document.getElementById('drawer-confidence-pill').innerText = `${conf}% Match`;
+      document.getElementById('drawer-confidence-text').innerText = `${conf}%`;
+      document.getElementById('drawer-confidence-bar').style.width = `${conf}%`;
+
+      // Venue / Concert
+      document.getElementById('drawer-venue-name').innerText = venue.name || 'Unknown Venue';
+      document.getElementById('drawer-venue-city').innerText = `${venue.city || ''}, ${venue.country || ''}`;
+      document.getElementById('drawer-concert-date').innerText = c.event_date || (v.recorded_at_utc ? v.recorded_at_utc.substring(0, 10) : '—');
+      document.getElementById('drawer-tour-name').innerText = c.tour_name || 'Individual Show';
+
+      // Specs
+      document.getElementById('drawer-duration').innerText = `${Math.round(v.duration_seconds || 0)}s`;
+      document.getElementById('drawer-resolution').innerText = `${v.width || 1920}x${v.height || 1080}`;
+      document.getElementById('drawer-recorded-time').innerText = v.recorded_at_utc ? v.recorded_at_utc.replace('T', ' ').substring(0, 16) : '—';
+
+      // Pre-fill YouTube form
+      const defaultTitle = `${artist} - ${song} (Live at ${venue.name || 'Concert'}, ${c.event_date ? c.event_date.substring(0, 4) : ''})`;
+      document.getElementById('drawer-title-input').value = defaultTitle;
+
+      // Open drawer panel
+      document.getElementById('drawer-backdrop').classList.remove('opacity-0', 'pointer-events-none');
+      document.getElementById('drawer-panel').classList.remove('translate-x-full');
+    }
+
+    function closeDrawer() {
+      document.getElementById('drawer-backdrop').classList.add('opacity-0', 'pointer-events-none');
+      document.getElementById('drawer-panel').classList.add('translate-x-full');
+      activeSelectedVideo = null;
+    }
+
+    async function handleDrawerApprove() {
+      if (!activeSelectedVideo) return;
+      const title = document.getElementById('drawer-title-input').value;
+      const privacy = document.getElementById('drawer-privacy-input').value;
+      await approveVideo(activeSelectedVideo.id, title, privacy);
+      closeDrawer();
+    }
+
+    async function handleDrawerReject() {
+      if (!activeSelectedVideo) return;
+      await rejectVideo(activeSelectedVideo.id);
+      closeDrawer();
+    }
+
+    async function quickApprove(id) {
+      await approveVideo(id);
+    }
+
+    async function approveVideo(id, title, privacy) {
       try {
-        await fetch(`/api/video/${id}/approve`, { method: 'POST' });
+        const payload = {};
+        if (title) payload.title = title;
+        if (privacy) payload.privacy = privacy;
+
+        const res = await fetch(`/api/video/${id}/approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!data.success) {
+          alert('Failed to approve video: ' + (data.error || 'Server error'));
+        }
         await loadData();
       } catch (err) {
         alert('Failed to approve video: ' + err);
@@ -468,10 +1289,13 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     async function triggerAction(action) {
-      const btn = document.getElementById(`btn-${action}`);
-      const origText = btn.innerHTML;
-      btn.innerHTML = '<span>⏳</span> Working...';
-      btn.disabled = true;
+      const btn = document.getElementById(`btn-${action}-action`) || document.getElementById(`sidebar-btn-${action}`);
+      let orig = '';
+      if (btn) {
+        orig = btn.innerHTML;
+        btn.innerHTML = '<span>⏳ Working...</span>';
+        btn.disabled = true;
+      }
 
       try {
         const res = await fetch(`/api/${action}`, { method: 'POST' });
@@ -480,11 +1304,16 @@ HTML_PAGE = """<!DOCTYPE html>
       } catch (err) {
         alert(`Action ${action} failed: ` + err);
       } finally {
-        btn.innerHTML = origText;
-        btn.disabled = false;
+        if (btn) {
+          btn.innerHTML = orig;
+          btn.disabled = false;
+        }
       }
     }
 
+    // =================================================================
+    // SCAN & INGESTION MODAL
+    // =================================================================
     function openScanModal() {
       document.getElementById('scan-modal').classList.remove('hidden');
     }
@@ -505,22 +1334,21 @@ HTML_PAGE = """<!DOCTYPE html>
       const viewLocal = document.getElementById('scan-mode-local');
       document.getElementById('scan-feedback-box').classList.add('hidden');
 
-      // Reset all buttons
-      btnDrive.className = 'px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium';
-      btnPhotos.className = 'px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium';
-      btnLocal.className = 'px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium';
+      btnDrive.className = 'flex-1 py-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 font-semibold transition';
+      btnPhotos.className = 'flex-1 py-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 font-semibold transition';
+      btnLocal.className = 'flex-1 py-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 font-semibold transition';
       viewDrive.classList.add('hidden');
       viewPhotos.classList.add('hidden');
       viewLocal.classList.add('hidden');
 
       if (mode === 'drive') {
-        btnDrive.className = 'px-2.5 py-1 rounded bg-zinc-800 text-zinc-200 font-medium';
+        btnDrive.className = 'flex-1 py-1.5 rounded-lg bg-zinc-800 text-zinc-200 font-semibold transition';
         viewDrive.classList.remove('hidden');
       } else if (mode === 'photos') {
-        btnPhotos.className = 'px-2.5 py-1 rounded bg-zinc-800 text-zinc-200 font-medium';
+        btnPhotos.className = 'flex-1 py-1.5 rounded-lg bg-zinc-800 text-zinc-200 font-semibold transition';
         viewPhotos.classList.remove('hidden');
       } else {
-        btnLocal.className = 'px-2.5 py-1 rounded bg-zinc-800 text-zinc-200 font-medium';
+        btnLocal.className = 'flex-1 py-1.5 rounded-lg bg-zinc-800 text-zinc-200 font-semibold transition';
         viewLocal.classList.remove('hidden');
       }
     }
@@ -591,40 +1419,18 @@ HTML_PAGE = """<!DOCTYPE html>
 
         if (!data.success) {
           feedback.classList.remove('hidden');
-          if (data.is_scope_error) {
-            feedback.innerHTML = `
-              <div class="bg-amber-950/40 border border-amber-800 text-amber-200 p-3 rounded space-y-1.5">
-                <div class="font-bold flex items-center gap-1.5">
-                  <span>⚠️</span> Google Photos Scope Notice (403 Forbidden)
-                </div>
-                <p>Google has restricted broad automated background searches on personal photo libraries.</p>
-                <div class="pt-1 flex items-center gap-2">
-                  <button type="button" onclick="setScanMode('drive')" class="px-2 py-1 rounded bg-blue-900/60 hover:bg-blue-900 text-blue-100 font-semibold text-[11px]">
-                    Use Google Drive Tab ⚡
-                  </button>
-                  <button type="button" onclick="setScanMode('local')" class="px-2 py-1 rounded bg-amber-900/60 hover:bg-amber-900 text-amber-100 font-semibold text-[11px]">
-                    Use Local Folder Tab 📁
-                  </button>
-                  <button type="button" onclick="launchPickerSession()" class="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-semibold text-[11px]">
-                    Photos Picker 📸
-                  </button>
-                </div>
-              </div>
-            `;
-          } else {
-            feedback.innerHTML = `
-              <div class="bg-red-950/40 border border-red-800 text-red-200 p-3 rounded">
-                <div class="font-bold">Scan Error:</div>
-                <div>${data.error || 'Failed to scan videos.'}</div>
-              </div>
-            `;
-          }
+          feedback.innerHTML = `
+            <div class="bg-rose-950/40 border border-rose-800 text-rose-200 p-3 rounded-xl">
+              <div class="font-bold">Scan Notice:</div>
+              <div>${data.error || 'Failed to scan videos.'}</div>
+            </div>
+          `;
           return;
         }
 
         closeScanModal();
         await loadData();
-        alert(`Scan completed: Discovered ${data.scanned_count || 0} candidate video(s).`);
+        alert(`Discovery completed: Ingested ${data.scanned_count || 0} candidate video(s).`);
       } catch (err) {
         alert('Scan failed: ' + err);
       } finally {
@@ -643,7 +1449,7 @@ HTML_PAGE = """<!DOCTYPE html>
         const res = await fetch('/api/picker/create', { method: 'POST' });
         const data = await res.json();
         if (!data.success) {
-          alert('Failed to create Google Photos Picker session: ' + (data.error || 'Unknown error'));
+          alert('Failed to create Photos Picker session: ' + (data.error || 'Unknown error'));
           return;
         }
 
@@ -672,7 +1478,6 @@ HTML_PAGE = """<!DOCTYPE html>
             console.error('Picker poll error:', e);
           }
         }, 4000);
-
       } catch (err) {
         alert('Failed to initiate Photos Picker: ' + err);
         btn.innerText = orig;
@@ -680,8 +1485,35 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
-    // Auto-refresh every 10 seconds
+    function toggleSidebar() {
+      const sidebar = document.getElementById('app-sidebar');
+      const backdrop = document.getElementById('sidebar-backdrop');
+      const isClosed = sidebar.classList.contains('-translate-x-full');
+      if (isClosed) {
+        sidebar.classList.remove('-translate-x-full');
+        backdrop.classList.remove('hidden');
+      } else {
+        sidebar.classList.add('-translate-x-full');
+        backdrop.classList.add('hidden');
+      }
+    }
+
+    // Global Keydown Listeners (ESC closes modals & drawers, ⌘K focuses search)
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeDrawer();
+        closeScanModal();
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        const searchInput = document.getElementById('global-search');
+        if (searchInput) searchInput.focus();
+      }
+    });
+
+    // Initial Data Load & Auto-Refresh
     loadData();
+    setTab('board');
     setInterval(loadData, 10000);
   </script>
 </body>
