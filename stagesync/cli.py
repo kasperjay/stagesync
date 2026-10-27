@@ -613,8 +613,8 @@ def main() -> None:
     p_daemon.add_argument("--run-once", action="store_true", help="Execute single cycle and exit")
     p_daemon.set_defaults(func=cmd_daemon)
 
-    # serve / ui
-    p_serve = subparsers.add_parser("serve", help="Launch local Web Dashboard")
+    # serve / ui / web
+    p_serve = subparsers.add_parser("serve", aliases=["web"], help="Launch local Web Dashboard")
     p_serve.add_argument("--host", type=str, default="0.0.0.0", help="Host interface (default: 0.0.0.0)")
     p_serve.add_argument("--port", type=int, default=8765, help="HTTP port (default: 8765)")
     p_serve.add_argument("--open-browser", action="store_true", help="Automatically open browser")
