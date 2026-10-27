@@ -69,6 +69,42 @@ class TestCLI(unittest.TestCase):
         # Should print table without prompting
         cmd_review(args)
 
+    def test_extract_auth_code(self) -> None:
+        from stagesync.cli import extract_auth_code
+
+        # Raw code
+        self.assertEqual(extract_auth_code("4/0AbCdEf123"), "4/0AbCdEf123")
+        # Full redirected URL
+        url = "http://localhost:8090/youtube_callback?code=4%2F0AbCdEf123&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.readonly"
+        self.assertEqual(extract_auth_code(url), "4/0AbCdEf123")
+        # Whitespace handling
+        self.assertEqual(extract_auth_code("  code_xyz  "), "code_xyz")
+
+    @patch("stagesync.ingestion.google_drive.GoogleDriveClient.exchange_code")
+    @patch("stagesync.ingestion.google_drive.GoogleDriveClient.get_authorization_url")
+    @patch("stagesync.ingestion.google_drive.GoogleDriveClient.is_authenticated")
+    @patch("rich.prompt.Prompt.ask")
+    def test_cmd_auth_google_drive(
+        self,
+        mock_prompt: MagicMock,
+        mock_is_auth: MagicMock,
+        mock_get_url: MagicMock,
+        mock_exchange: MagicMock,
+    ) -> None:
+        from stagesync.cli import cmd_auth
+
+        mock_is_auth.return_value = False
+        mock_get_url.return_value = "https://accounts.google.com/o/oauth2/v2/auth?client_id=test"
+        mock_prompt.return_value = "http://localhost:8090/youtube_callback?code=mock_oauth_code"
+
+        args = argparse.Namespace(
+            service="google-drive",
+            redirect_uri=None,
+            force=False,
+        )
+        cmd_auth(args)
+        mock_exchange.assert_called_once_with("mock_oauth_code", "http://localhost:8090/youtube_callback")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -74,8 +74,7 @@ class GoogleDriveClient:
         alt_paths = [
             self.credentials_path,
             Path("~/.config/stagesync/google_drive_credentials.json").expanduser(),
-            Path("~/.config/stagesync/google_photos_credentials.json").expanduser(),
-            Path("~/.config/google-photos/credentials.json").expanduser(),
+            Path("~/.config/stagesync/youtube_credentials.json").expanduser(),
         ]
         for p in alt_paths:
             if p and p.exists():

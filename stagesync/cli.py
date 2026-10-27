@@ -480,48 +480,78 @@ def cmd_upload(args: argparse.Namespace) -> None:
             console.print(f"[bold red]✗ Upload failed:[/bold red] {r.error_message}")
 
 
+def extract_auth_code(raw_input: str) -> str:
+    """Extract clean OAuth authorization code if user pasted a full callback URL."""
+    val = raw_input.strip()
+    if "?" in val or "code=" in val:
+        from urllib.parse import parse_qs, urlparse
+        try:
+            parsed = urlparse(val)
+            qs = parse_qs(parsed.query)
+            if "code" in qs and qs["code"]:
+                return qs["code"][0].strip()
+        except Exception:
+            pass
+    return val
+
+
 def cmd_auth(args: argparse.Namespace) -> None:
     """Manage OAuth authentication flows."""
     target = args.service
+    force = getattr(args, "force", False)
 
     if target == "google-photos":
         client = GooglePhotosClient()
-        if client.is_authenticated():
-            console.print("[green]Google Photos is already authenticated.[/green]")
+        if client.is_authenticated() and not force:
+            console.print("[green]Google Photos is already authenticated. Use --force to re-authenticate.[/green]")
             return
-        redirect_uri = client.google_photos_redirect_uri if hasattr(client, 'google_photos_redirect_uri') else "http://localhost:8090/callback"
+        redirect_uri = getattr(args, "redirect_uri", None) or getattr(client, 'google_photos_redirect_uri', None) or "http://localhost:8090/callback"
         url = client.get_authorization_url(redirect_uri)
         console.print("\n[bold cyan]Google Photos Authorization:[/bold cyan]")
         console.print(f"Open this URL in your browser:\n[link={url}]{url}[/link]\n")
-        code = Prompt.ask("Paste the authorization code received")
-        client.exchange_code(code.strip(), redirect_uri)
+        console.print("[dim]Tip: You can paste either the authorization code or the full redirected URL.[/dim]")
+        raw_code = Prompt.ask("Paste the authorization code or redirected URL")
+        code = extract_auth_code(raw_code)
+        client.exchange_code(code, redirect_uri)
         console.print("[bold green]✓ Google Photos token successfully saved![/bold green]")
 
     elif target in ("google-drive", "drive"):
         from stagesync.ingestion.google_drive import GoogleDriveClient
         client = GoogleDriveClient()
-        if client.is_authenticated():
-            console.print("[green]Google Drive is already authenticated.[/green]")
+        if client.is_authenticated() and not force:
+            console.print("[green]Google Drive is already authenticated. Use --force to re-authenticate.[/green]")
             return
-        redirect_uri = client.redirect_uri or "http://localhost:8090/drive_callback"
+        redirect_uri = getattr(args, "redirect_uri", None) or client.redirect_uri or "http://localhost:8090/youtube_callback"
         url = client.get_authorization_url(redirect_uri)
         console.print("\n[bold cyan]Google Drive Authorization:[/bold cyan]")
         console.print(f"Open this URL in your browser:\n[link={url}]{url}[/link]\n")
-        code = Prompt.ask("Paste the authorization code received")
-        client.exchange_code(code.strip(), redirect_uri)
+        console.print(
+            f"[dim]Note: Google will redirect your browser to {redirect_uri}?code=...\n"
+            "If your browser shows 'This site can't be reached', simply copy the code\n"
+            "OR the full URL from your browser address bar and paste it below.[/dim]\n"
+        )
+        raw_code = Prompt.ask("Paste the authorization code or redirected URL")
+        code = extract_auth_code(raw_code)
+        client.exchange_code(code, redirect_uri)
         console.print("[bold green]✓ Google Drive token successfully saved![/bold green]")
 
     elif target == "youtube":
         yt = YouTubeAuth()
-        if yt.is_authenticated():
-            console.print("[green]YouTube is already authenticated.[/green]")
+        if yt.is_authenticated() and not force:
+            console.print("[green]YouTube is already authenticated. Use --force to re-authenticate.[/green]")
             return
-        redirect_uri = "http://localhost:8090/youtube_callback"
+        redirect_uri = getattr(args, "redirect_uri", None) or getattr(yt, "redirect_uri", None) or "http://localhost:8090/youtube_callback"
         url = yt.get_authorization_url(redirect_uri)
         console.print("\n[bold cyan]YouTube Authorization:[/bold cyan]")
         console.print(f"Open this URL in your browser:\n[link={url}]{url}[/link]\n")
-        code = Prompt.ask("Paste the authorization code received")
-        yt.exchange_code(code.strip(), redirect_uri)
+        console.print(
+            f"[dim]Note: Google will redirect your browser to {redirect_uri}?code=...\n"
+            "If your browser shows 'This site can't be reached', simply copy the code\n"
+            "OR the full URL from your browser address bar and paste it below.[/dim]\n"
+        )
+        raw_code = Prompt.ask("Paste the authorization code or redirected URL")
+        code = extract_auth_code(raw_code)
+        yt.exchange_code(code, redirect_uri)
         console.print("[bold green]✓ YouTube token successfully saved![/bold green]")
 
     elif target == "status":
@@ -624,6 +654,17 @@ def main() -> None:
         "service",
         choices=["google-photos", "google-drive", "youtube", "status"],
         help="Target authentication service",
+    )
+    p_auth.add_argument(
+        "--redirect-uri",
+        type=str,
+        default=None,
+        help="Override OAuth redirect URI (default matches configured service redirect URI)",
+    )
+    p_auth.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-authentication even if token exists",
     )
     p_auth.set_defaults(func=cmd_auth)
 

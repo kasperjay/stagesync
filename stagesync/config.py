@@ -91,18 +91,19 @@ class Settings(BaseModel):
     google_drive_client_id: Optional[str] = Field(
         default_factory=lambda: os.getenv(
             "GOOGLE_DRIVE_CLIENT_ID",
-            os.getenv("GOOGLE_PHOTOS_CLIENT_ID", os.getenv("YOUTUBE_CLIENT_ID")),
+            os.getenv("YOUTUBE_CLIENT_ID", os.getenv("GOOGLE_PHOTOS_CLIENT_ID")),
         )
     )
     google_drive_client_secret: Optional[str] = Field(
         default_factory=lambda: os.getenv(
             "GOOGLE_DRIVE_CLIENT_SECRET",
-            os.getenv("GOOGLE_PHOTOS_CLIENT_SECRET", os.getenv("YOUTUBE_CLIENT_SECRET")),
+            os.getenv("YOUTUBE_CLIENT_SECRET", os.getenv("GOOGLE_PHOTOS_CLIENT_SECRET")),
         )
     )
     google_drive_redirect_uri: str = Field(
         default_factory=lambda: os.getenv(
-            "GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8090/drive_callback"
+            "GOOGLE_DRIVE_REDIRECT_URI",
+            os.getenv("YOUTUBE_REDIRECT_URI", "http://localhost:8090/youtube_callback"),
         )
     )
     google_drive_credentials_path: Path = Field(
