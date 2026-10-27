@@ -126,15 +126,59 @@ def cmd_scan(args: argparse.Namespace) -> None:
     """Discover videos from Google Photos or local directory."""
     coordinator = PipelineCoordinator()
 
-    if args.dir:
+    if getattr(args, "dir", None):
         dir_path = Path(args.dir)
         console.print(f"[bold cyan]Scanning local directory:[/bold cyan] {dir_path}")
         with console.status("[bold green]Ingesting local media files..."):
             videos = coordinator.scan_local_directory(dir_path)
         console.print(f"[bold green]Discovered {len(videos)} video files.[/bold green]")
+        if videos:
+            table = Table(title=f"Discovered Local Videos ({len(videos)})", box=box.ROUNDED)
+            table.add_column("ID", style="dim", max_width=12)
+            table.add_column("Filename", style="cyan")
+            table.add_column("Size", justify="right")
+            table.add_column("Status", style="bold green")
+            for v in videos:
+                sz = format_file_size(v.file_size_bytes)
+                table.add_row(v.id[:8] + "...", v.filename, sz, v.processing_status.value)
+            console.print(table)
         return
 
-    # Google Photos Scan
+    if getattr(args, "picker", False):
+        console.print("[bold cyan]Creating Google Photos Picker session...[/bold cyan]")
+        try:
+            session = coordinator.photos_client.create_picker_session()
+            picker_uri = session["pickerUri"]
+            session_id = session["id"]
+            console.print("\n[bold green]Please open this URL to select your concert videos:[/bold green]")
+            console.print(f"[link={picker_uri}]{picker_uri}[/link]\n")
+            console.print("Waiting for photo selection to complete in browser (Ctrl+C to abort)...")
+            import time
+            while True:
+                if coordinator.photos_client.poll_picker_session(session_id):
+                    console.print("[bold green]✓ Selection confirmed by Google Photos![/bold green]")
+                    break
+                time.sleep(4)
+            items = coordinator.photos_client.get_picker_items(session_id)
+            videos = coordinator.ingest_picker_items(items, dry_run=args.dry_run)
+            coordinator.photos_client.delete_picker_session(session_id)
+            if not videos:
+                console.print("[yellow]No new videos ingested from picker session.[/yellow]")
+                return
+            table = Table(title=f"Picker Results ({len(videos)} candidates)", box=box.ROUNDED)
+            table.add_column("ID", style="dim", max_width=12)
+            table.add_column("Filename", style="cyan")
+            table.add_column("Dimensions", justify="center")
+            table.add_column("Status", style="bold green")
+            for v in videos:
+                dim = f"{v.width}x{v.height}" if v.width and v.height else "N/A"
+                table.add_row(v.id[:8] + "...", v.filename, dim, v.processing_status.value)
+            console.print(table)
+        except Exception as e:
+            console.print(f"\n[bold red]✗ Picker Error:[/bold red] {e}")
+        return
+
+    # Google Photos Background Scan
     date_info = []
     if args.start_date:
         date_info.append(f"from {args.start_date}")
@@ -149,15 +193,35 @@ def cmd_scan(args: argparse.Namespace) -> None:
     if args.dry_run:
         console.print("[yellow]Running in DRY-RUN mode. Videos will be cataloged without downloading binaries.[/yellow]")
 
-    with console.status("[bold green]Querying Google Photos Library API..."):
-        videos = coordinator.scan_google_photos(
-            start_date=args.start_date,
-            end_date=args.end_date,
-            days=args.days if (not args.start_date and not args.end_date) else None,
-            album_id=args.album,
-            dry_run=args.dry_run,
-            limit=args.limit,
-        )
+    try:
+        with console.status("[bold green]Querying Google Photos Library API..."):
+            videos = coordinator.scan_google_photos(
+                start_date=args.start_date,
+                end_date=args.end_date,
+                days=args.days if (not args.start_date and not args.end_date) else None,
+                album_id=args.album,
+                dry_run=args.dry_run,
+                limit=args.limit,
+            )
+    except Exception as e:
+        console.print(f"\n[bold red]✗ Google Photos Query Failed:[/bold red] {e}\n")
+        err_str = str(e).lower()
+        if "403" in err_str or "insufficient" in err_str or "scope" in err_str:
+            console.print(
+                Panel(
+                    "[bold yellow]Google Photos Scope Deprecation Notice (2025/2026)[/bold yellow]\n\n"
+                    "Google has restricted broad automated background scanning via `photoslibrary.readonly` (HTTP 403).\n\n"
+                    "[bold green]Immediate Recommended Options:[/bold green]\n"
+                    "1. Scan a local directory of downloaded/synced concert videos:\n"
+                    "   [bold cyan]stagesync scan --dir /path/to/concert_videos[/bold cyan]\n\n"
+                    "2. Select videos via Google Photos Picker:\n"
+                    "   [bold cyan]stagesync scan --picker[/bold cyan]\n\n"
+                    "3. Open Web Dashboard at [cyan]http://localhost:8765[/cyan] to use Local Directory or Picker tabs.",
+                    border_style="yellow",
+                    box=box.ROUNDED,
+                )
+            )
+        return
 
     if not videos:
         console.print("[yellow]No new videos found for the specified criteria.[/yellow]")
@@ -461,6 +525,7 @@ def main() -> None:
     p_scan.add_argument("--days", type=int, default=None, help="Days back to scan in Google Photos (e.g. 30)")
     p_scan.add_argument("--album", type=str, default=None, help="Album ID filter")
     p_scan.add_argument("--dir", type=str, default=None, help="Local directory path to scan")
+    p_scan.add_argument("--picker", action="store_true", help="Launch interactive Google Photos Picker flow")
     p_scan.add_argument("--limit", type=int, default=50, help="Maximum items to scan")
     p_scan.add_argument("--dry-run", action="store_true", help="Catalog candidates without downloading")
     p_scan.set_defaults(func=cmd_scan)

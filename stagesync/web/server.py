@@ -164,17 +164,27 @@ HTML_PAGE = """<!DOCTYPE html>
       </div>
     </section>
 
-    <!-- Scan Date Range Modal -->
+    <!-- Unified Scan Modal -->
     <div id="scan-modal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6 max-w-md w-full space-y-4 shadow-xl">
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6 max-w-lg w-full space-y-4 shadow-xl">
         <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
-          <h3 class="font-bold text-base text-zinc-100 flex items-center gap-2">
-            <span>📸</span> Scan Google Photos
-          </h3>
+          <div class="flex items-center gap-3">
+            <h3 class="font-bold text-base text-zinc-100 flex items-center gap-2">
+              <span>🔍</span> Discovery Scan
+            </h3>
+            <div class="flex bg-zinc-950 p-0.5 rounded border border-zinc-800 text-xs">
+              <button type="button" id="scan-tab-btn-photos" onclick="setScanMode('photos')" class="px-2.5 py-1 rounded bg-zinc-800 text-zinc-200 font-medium">Google Photos</button>
+              <button type="button" id="scan-tab-btn-local" onclick="setScanMode('local')" class="px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium">Local Folder</button>
+            </div>
+          </div>
           <button onclick="closeScanModal()" class="text-zinc-500 hover:text-zinc-300 text-sm">✕</button>
         </div>
 
-        <div class="space-y-3 text-xs">
+        <!-- Notification / Error Box -->
+        <div id="scan-feedback-box" class="hidden text-xs"></div>
+
+        <!-- Mode: Google Photos -->
+        <div id="scan-mode-photos" class="space-y-3 text-xs">
           <div>
             <label class="block text-zinc-400 mb-1">Start Date</label>
             <input type="date" id="scan-start-date" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
@@ -183,18 +193,40 @@ HTML_PAGE = """<!DOCTYPE html>
             <label class="block text-zinc-400 mb-1">End Date</label>
             <input type="date" id="scan-end-date" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
           </div>
-          <div class="flex items-center gap-2 pt-1 text-zinc-400">
-            <span class="text-[11px]">Or quick scan past:</span>
-            <button type="button" onclick="setQuickDays(7)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">7d</button>
-            <button type="button" onclick="setQuickDays(30)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">30d</button>
-            <button type="button" onclick="setQuickDays(90)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">90d</button>
-            <button type="button" onclick="setQuickDays(365)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">1y</button>
+          <div class="flex items-center justify-between pt-1 text-zinc-400">
+            <div class="flex items-center gap-1.5">
+              <span class="text-[11px]">Presets:</span>
+              <button type="button" onclick="setQuickDays(7)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">7d</button>
+              <button type="button" onclick="setQuickDays(30)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">30d</button>
+              <button type="button" onclick="setQuickDays(90)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">90d</button>
+              <button type="button" onclick="setQuickDays(365)" class="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px]">1y</button>
+            </div>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" id="scan-dry-run" class="rounded bg-zinc-950 border-zinc-800 text-blue-600">
+              <span class="text-[11px]">Dry Run</span>
+            </label>
+          </div>
+
+          <div class="pt-2 border-t border-zinc-800/60 flex items-center justify-between">
+            <span class="text-[11px] text-zinc-500">Or select directly in Google Photos:</span>
+            <button type="button" onclick="launchPickerSession()" id="btn-picker-launch" class="px-2.5 py-1 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-blue-400 border border-blue-900/50">
+              Launch Photos Picker ↗
+            </button>
+          </div>
+        </div>
+
+        <!-- Mode: Local Directory -->
+        <div id="scan-mode-local" class="hidden space-y-3 text-xs">
+          <div>
+            <label class="block text-zinc-400 mb-1">Local Directory Path</label>
+            <input type="text" id="scan-local-dir" placeholder="/home/workspace/concert_videos" class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-zinc-200 focus:outline-none focus:border-blue-500 font-mono">
+            <p class="text-[11px] text-zinc-500 mt-1">Point to any folder containing concert video files (.mp4, .mov, .m4v).</p>
           </div>
         </div>
 
         <div class="flex items-center justify-end gap-2 pt-3 border-t border-zinc-800">
-          <button onclick="closeScanModal()" class="px-3 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">Cancel</button>
-          <button onclick="executeScanWithDates()" id="btn-run-scan" class="px-4 py-1.5 text-xs font-medium rounded bg-blue-600 hover:bg-blue-500 text-white shadow-sm">Start Scan</button>
+          <button onclick="closeScanModal()" class="px-3 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">Close</button>
+          <button onclick="executeScan()" id="btn-run-scan" class="px-4 py-1.5 text-xs font-medium rounded bg-blue-600 hover:bg-blue-500 text-white shadow-sm">Start Scan</button>
         </div>
       </div>
     </div>
@@ -422,6 +454,29 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('scan-modal').classList.add('hidden');
     }
 
+    let currentScanMode = 'photos';
+
+    function setScanMode(mode) {
+      currentScanMode = mode;
+      const btnPhotos = document.getElementById('scan-tab-btn-photos');
+      const btnLocal = document.getElementById('scan-tab-btn-local');
+      const viewPhotos = document.getElementById('scan-mode-photos');
+      const viewLocal = document.getElementById('scan-mode-local');
+      document.getElementById('scan-feedback-box').classList.add('hidden');
+
+      if (mode === 'photos') {
+        btnPhotos.className = 'px-2.5 py-1 rounded bg-zinc-800 text-zinc-200 font-medium';
+        btnLocal.className = 'px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium';
+        viewPhotos.classList.remove('hidden');
+        viewLocal.classList.add('hidden');
+      } else {
+        btnLocal.className = 'px-2.5 py-1 rounded bg-zinc-800 text-zinc-200 font-medium';
+        btnPhotos.className = 'px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 font-medium';
+        viewLocal.classList.remove('hidden');
+        viewPhotos.classList.add('hidden');
+      }
+    }
+
     function setQuickDays(days) {
       const end = new Date();
       const start = new Date();
@@ -430,30 +485,124 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('scan-start-date').value = start.toISOString().split('T')[0];
     }
 
-    async function executeScanWithDates() {
-      const startDate = document.getElementById('scan-start-date').value;
-      const endDate = document.getElementById('scan-end-date').value;
+    async function executeScan() {
       const btn = document.getElementById('btn-run-scan');
       const orig = btn.innerText;
       btn.innerText = 'Scanning...';
       btn.disabled = true;
+      const feedback = document.getElementById('scan-feedback-box');
+      feedback.classList.add('hidden');
 
       try {
+        let payload = {};
+        if (currentScanMode === 'local') {
+          const dirPath = document.getElementById('scan-local-dir').value.trim();
+          if (!dirPath) {
+            alert('Please specify a directory path to scan.');
+            return;
+          }
+          payload = { directory: dirPath };
+        } else {
+          const startDate = document.getElementById('scan-start-date').value;
+          const endDate = document.getElementById('scan-end-date').value;
+          const dryRun = document.getElementById('scan-dry-run').checked;
+          payload = {
+            start_date: startDate || undefined,
+            end_date: endDate || undefined,
+            dry_run: dryRun
+          };
+        }
+
         const res = await fetch('/api/scan', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            start_date: startDate || undefined,
-            end_date: endDate || undefined
-          })
+          body: JSON.stringify(payload)
         });
         const data = await res.json();
+
+        if (!data.success) {
+          feedback.classList.remove('hidden');
+          if (data.is_scope_error) {
+            feedback.innerHTML = `
+              <div class="bg-amber-950/40 border border-amber-800 text-amber-200 p-3 rounded space-y-1.5">
+                <div class="font-bold flex items-center gap-1.5">
+                  <span>⚠️</span> Google Photos Scope Notice (403 Forbidden)
+                </div>
+                <p>Google has restricted broad automated background searches on user photo libraries.</p>
+                <div class="pt-1 flex items-center gap-2">
+                  <button type="button" onclick="setScanMode('local')" class="px-2 py-1 rounded bg-amber-900/60 hover:bg-amber-900 text-amber-100 font-semibold text-[11px]">
+                    Use Local Folder Tab 📁
+                  </button>
+                  <button type="button" onclick="launchPickerSession()" class="px-2 py-1 rounded bg-blue-900/60 hover:bg-blue-900 text-blue-100 font-semibold text-[11px]">
+                    Launch Photos Picker 📸
+                  </button>
+                </div>
+              </div>
+            `;
+          } else {
+            feedback.innerHTML = `
+              <div class="bg-red-950/40 border border-red-800 text-red-200 p-3 rounded">
+                <div class="font-bold">Scan Error:</div>
+                <div>${data.error || 'Failed to scan videos.'}</div>
+              </div>
+            `;
+          }
+          return;
+        }
+
         closeScanModal();
         await loadData();
         alert(`Scan completed: Discovered ${data.scanned_count || 0} candidate video(s).`);
       } catch (err) {
         alert('Scan failed: ' + err);
       } finally {
+        btn.innerText = orig;
+        btn.disabled = false;
+      }
+    }
+
+    async function launchPickerSession() {
+      const btn = document.getElementById('btn-picker-launch');
+      const orig = btn.innerText;
+      btn.innerText = 'Creating Picker...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/picker/create', { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) {
+          alert('Failed to create Google Photos Picker session: ' + (data.error || 'Unknown error'));
+          return;
+        }
+
+        const pickerUri = data.session.pickerUri;
+        const sessionId = data.session.id;
+        window.open(pickerUri, '_blank');
+
+        btn.innerText = 'Waiting for selection...';
+        const pollInterval = setInterval(async () => {
+          try {
+            const pRes = await fetch('/api/picker/poll', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ session_id: sessionId })
+            });
+            const pData = await pRes.json();
+            if (pData.completed) {
+              clearInterval(pollInterval);
+              btn.innerText = orig;
+              btn.disabled = false;
+              closeScanModal();
+              await loadData();
+              alert(`Photos Picker selection complete! Ingested ${pData.ingested_count} video(s).`);
+            }
+          } catch (e) {
+            console.error('Picker poll error:', e);
+          }
+        }, 4000);
+
+      } catch (err) {
+        alert('Failed to initiate Photos Picker: ' + err);
         btn.innerText = orig;
         btn.disabled = false;
       }
@@ -487,6 +636,8 @@ def create_app(
     app.router.add_post("/api/video/{id}/approve", handle_approve_video)
     app.router.add_post("/api/video/{id}/reject", handle_reject_video)
     app.router.add_post("/api/scan", handle_trigger_scan)
+    app.router.add_post("/api/picker/create", handle_picker_create)
+    app.router.add_post("/api/picker/poll", handle_picker_poll)
     app.router.add_post("/api/process", handle_trigger_process)
     app.router.add_post("/api/upload", handle_trigger_upload)
 
@@ -650,7 +801,7 @@ async def handle_reject_video(request: web.Request) -> web.Response:
 
 
 async def handle_trigger_scan(request: web.Request) -> web.Response:
-    """Trigger Google Photos discovery scan with optional date range."""
+    """Trigger Google Photos or local directory discovery scan."""
     coordinator: PipelineCoordinator = request.app[COORD_KEY]
     body = {}
     if request.can_read_body:
@@ -659,10 +810,29 @@ async def handle_trigger_scan(request: web.Request) -> web.Response:
         except Exception:
             body = {}
 
+    directory = body.get("directory")
+    if directory:
+        try:
+            discovered = coordinator.scan_local_directory(directory)
+            return web.json_response({
+                "success": True,
+                "scanned_count": len(discovered),
+                "mode": "local_directory",
+            })
+        except Exception as e:
+            logger.exception("Failed to scan local directory %s: %s", directory, e)
+            return web.json_response({
+                "success": False,
+                "error": str(e),
+                "scanned_count": 0,
+                "mode": "local_directory",
+            })
+
     start_date = body.get("start_date")
     end_date = body.get("end_date")
     days_val = int(body["days"]) if body.get("days") else None
     limit_val = int(body.get("limit", 50))
+    dry_run = bool(body.get("dry_run", False))
 
     try:
         discovered = coordinator.scan_google_photos(
@@ -670,11 +840,61 @@ async def handle_trigger_scan(request: web.Request) -> web.Response:
             end_date=end_date,
             days=days_val,
             limit=limit_val,
+            dry_run=dry_run,
         )
-        return web.json_response({"success": True, "scanned_count": len(discovered)})
+        return web.json_response({
+            "success": True,
+            "scanned_count": len(discovered),
+            "mode": "google_photos",
+        })
     except Exception as e:
-        logger.exception("Failed to scan Google Photos: %s", e)
-        return web.json_response({"error": str(e)}, status=500)
+        logger.warning("Failed to scan Google Photos: %s", e)
+        err_msg = str(e)
+        is_scope_error = "403" in err_msg or "insufficient" in err_msg.lower()
+        return web.json_response({
+            "success": False,
+            "error": err_msg,
+            "is_scope_error": is_scope_error,
+            "scanned_count": 0,
+            "mode": "google_photos",
+        })
+
+
+async def handle_picker_create(request: web.Request) -> web.Response:
+    """Create a Google Photos Picker session."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    try:
+        session = coordinator.photos_client.create_picker_session()
+        return web.json_response({"success": True, "session": session})
+    except Exception as e:
+        logger.warning("Failed to create picker session: %s", e)
+        return web.json_response({"success": False, "error": str(e)})
+
+
+async def handle_picker_poll(request: web.Request) -> web.Response:
+    """Poll a Google Photos Picker session and ingest items if complete."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    body = await request.json() if request.can_read_body else {}
+    session_id = body.get("session_id")
+    dry_run = bool(body.get("dry_run", False))
+    if not session_id:
+        return web.json_response({"success": False, "error": "Missing session_id"}, status=400)
+    try:
+        is_done = coordinator.photos_client.poll_picker_session(session_id)
+        if not is_done:
+            return web.json_response({"success": True, "completed": False})
+
+        items = coordinator.photos_client.get_picker_items(session_id)
+        videos = coordinator.ingest_picker_items(items, dry_run=dry_run)
+        coordinator.photos_client.delete_picker_session(session_id)
+        return web.json_response({
+            "success": True,
+            "completed": True,
+            "ingested_count": len(videos),
+        })
+    except Exception as e:
+        logger.warning("Failed to poll picker session %s: %s", session_id, e)
+        return web.json_response({"success": False, "error": str(e)})
 
 
 async def handle_trigger_process(request: web.Request) -> web.Response:

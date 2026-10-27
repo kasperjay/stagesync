@@ -139,7 +139,7 @@ class PipelineCoordinator:
             )
         except Exception as e:
             logger.error("Failed to query Google Photos: %s", e)
-            return discovered_videos
+            raise RuntimeError(f"Google Photos query failed: {e}") from e
 
         for item in items:
             media_id = item.get("id")
@@ -185,6 +185,57 @@ class PipelineCoordinator:
                     video.processing_status = VideoStatus.DOWNLOADED
                 except Exception as e:
                     logger.error("Download failed for %s: %s", media_id, e)
+                    video.processing_status = VideoStatus.FAILED
+
+            saved = self.db.save_video(video)
+            discovered_videos.append(saved)
+
+        return discovered_videos
+
+    def ingest_picker_items(
+        self,
+        items: List[Dict[str, Any]],
+        dry_run: bool = False,
+    ) -> List[Video]:
+        """Ingest selected media items returned from the Google Photos Picker API."""
+        discovered_videos: List[Video] = []
+        for item in items:
+            media_id = item.get("id")
+            if not media_id:
+                continue
+
+            existing = self.db.get_video_by_source_id(media_id)
+            if existing:
+                discovered_videos.append(existing)
+                continue
+
+            raw_filename = item.get("filename", f"picker_video_{media_id}.mp4")
+            clean_filename = sanitize_filename(raw_filename)
+            base_url = item.get("baseUrl")
+            metadata_raw = item.get("mediaMetadata", {})
+
+            video = Video(
+                source_photo_id=media_id,
+                filename=clean_filename,
+                mime_type=item.get("mimeType", "video/mp4"),
+                width=int(metadata_raw.get("width", 0)) or None,
+                height=int(metadata_raw.get("height", 0)) or None,
+                processing_status=VideoStatus.DISCOVERED,
+            )
+
+            if dry_run or not base_url:
+                video.processing_status = VideoStatus.DISCOVERED
+            else:
+                target_file = self.download_dir / f"{video.id}_{clean_filename}"
+                try:
+                    self.db.update_video_status(video.id, VideoStatus.DOWNLOADING)
+                    file_path, sha_hash = self.photos_client.download_video(base_url, target_file)
+                    video.file_path = str(file_path)
+                    video.file_hash_sha256 = sha_hash
+                    video.file_size_bytes = file_path.stat().st_size
+                    video.processing_status = VideoStatus.DOWNLOADED
+                except Exception as e:
+                    logger.error("Download failed for picker item %s: %s", media_id, e)
                     video.processing_status = VideoStatus.FAILED
 
             saved = self.db.save_video(video)

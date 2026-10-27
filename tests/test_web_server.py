@@ -103,6 +103,66 @@ class TestWebServer(AioHTTPTestCase):
         self.assertTrue(data["success"])
         self.mock_coord.reject_video.assert_called_once_with("v_123")
 
+    async def test_scan_local_directory_endpoint(self):
+        """Verify /api/scan with directory invokes scan_local_directory."""
+        fake_video = Video(source_photo_id="loc_1", filename="clip.mp4")
+        self.mock_coord.scan_local_directory.return_value = [fake_video]
+
+        resp = await self.client.post("/api/scan", json={"directory": "/tmp/videos"})
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["scanned_count"], 1)
+        self.assertEqual(data["mode"], "local_directory")
+        self.mock_coord.scan_local_directory.assert_called_once_with("/tmp/videos")
+
+    async def test_scan_google_photos_scope_error_handling(self):
+        """Verify 403 insufficient scopes error returns transparent diagnostics."""
+        self.mock_coord.scan_google_photos.side_effect = RuntimeError(
+            "Google Photos query failed: 403 Client Error: Forbidden: Request had insufficient authentication scopes."
+        )
+
+        resp = await self.client.post("/api/scan", json={"start_date": "2024-01-01"})
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertFalse(data["success"])
+        self.assertTrue(data["is_scope_error"])
+        self.assertIn("insufficient authentication scopes", data["error"])
+
+    async def test_picker_create_and_poll_endpoints(self):
+        """Verify /api/picker/create and /api/picker/poll flow."""
+        self.mock_coord.photos_client.create_picker_session.return_value = {
+            "id": "sess_123",
+            "pickerUri": "https://photos.google.com/picker/sess_123",
+        }
+        resp = await self.client.post("/api/picker/create")
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["session"]["id"], "sess_123")
+
+        # Incomplete poll
+        self.mock_coord.photos_client.poll_picker_session.return_value = False
+        resp = await self.client.post("/api/picker/poll", json={"session_id": "sess_123"})
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.assertFalse(data["completed"])
+
+        # Completed poll
+        self.mock_coord.photos_client.poll_picker_session.return_value = True
+        self.mock_coord.photos_client.get_picker_items.return_value = [{"id": "item_1", "baseUrl": "http://img"}]
+        fake_v = Video(source_photo_id="item_1", filename="picker.mp4")
+        self.mock_coord.ingest_picker_items.return_value = [fake_v]
+
+        resp = await self.client.post("/api/picker/poll", json={"session_id": "sess_123"})
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.assertTrue(data["completed"])
+        self.assertEqual(data["ingested_count"], 1)
+        self.mock_coord.photos_client.delete_picker_session.assert_called_once_with("sess_123")
+
 
 if __name__ == "__main__":
     unittest.main()

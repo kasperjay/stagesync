@@ -20,9 +20,14 @@ from stagesync.security import enforce_file_permissions, secure_save_json
 logger = logging.getLogger(__name__)
 
 GOOGLE_PHOTOS_API_BASE = "https://photoslibrary.googleapis.com/v1"
+GOOGLE_PHOTOS_PICKER_BASE = "https://photospicker.googleapis.com/v1"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-PHOTOS_READONLY_SCOPE = "https://www.googleapis.com/auth/photoslibrary.readonly"
+PHOTOS_READONLY_SCOPE = (
+    "https://www.googleapis.com/auth/photospicker.mediaitems.readonly "
+    "https://www.googleapis.com/auth/photoslibrary.readonly "
+    "https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata"
+)
 
 
 def _parse_date(date_val: Optional[Union[datetime.date, datetime.datetime, str]]) -> Optional[datetime.date]:
@@ -355,3 +360,66 @@ class GooglePhotosClient:
                             progress_callback(downloaded, total_bytes)
 
         return output_path, sha.hexdigest()
+
+    # -------------------------------------------------------------------------
+    # Google Photos Picker API (Modern 2026 Interactive Ingestion)
+    # -------------------------------------------------------------------------
+
+    def create_picker_session(self) -> Dict[str, str]:
+        """Create a new Google Photos Picker session.
+
+        Returns a dictionary with 'id' and 'pickerUri'.
+        """
+        access_token = self.get_access_token()
+        url = f"{GOOGLE_PHOTOS_PICKER_BASE}/sessions"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+        res = requests.post(url, headers=headers, timeout=20)
+        if res.status_code == 401:
+            access_token = self.get_access_token(force_refresh=True)
+            headers["Authorization"] = f"Bearer {access_token}"
+            res = requests.post(url, headers=headers, timeout=20)
+        res.raise_for_status()
+        data = res.json()
+        return {"id": data["id"], "pickerUri": data["pickerUri"]}
+
+    def poll_picker_session(self, session_id: str) -> bool:
+        """Check if user has finished selecting photos/videos in the Picker session."""
+        access_token = self.get_access_token()
+        url = f"{GOOGLE_PHOTOS_PICKER_BASE}/sessions/{session_id}"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        res = requests.get(url, headers=headers, timeout=20)
+        if res.status_code == 401:
+            access_token = self.get_access_token(force_refresh=True)
+            headers["Authorization"] = f"Bearer {access_token}"
+            res = requests.get(url, headers=headers, timeout=20)
+        res.raise_for_status()
+        data = res.json()
+        return bool(data.get("mediaItemsSet", False))
+
+    def get_picker_items(self, session_id: str, page_size: int = 100) -> List[Dict[str, Any]]:
+        """Retrieve the media items selected during the picker session."""
+        access_token = self.get_access_token()
+        url = f"{GOOGLE_PHOTOS_PICKER_BASE}/mediaItems"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        params = {"sessionId": session_id, "pageSize": min(page_size, 100)}
+        res = requests.get(url, headers=headers, params=params, timeout=20)
+        if res.status_code == 401:
+            access_token = self.get_access_token(force_refresh=True)
+            headers["Authorization"] = f"Bearer {access_token}"
+            res = requests.get(url, headers=headers, params=params, timeout=20)
+        res.raise_for_status()
+        data = res.json()
+        return data.get("mediaItems", [])
+
+    def delete_picker_session(self, session_id: str) -> None:
+        """Clean up and delete a Picker session."""
+        try:
+            access_token = self.get_access_token()
+            url = f"{GOOGLE_PHOTOS_PICKER_BASE}/sessions/{session_id}"
+            headers = {"Authorization": f"Bearer {access_token}"}
+            requests.delete(url, headers=headers, timeout=10)
+        except Exception as e:
+            logger.debug("Failed to delete picker session %s: %s", session_id, e)
