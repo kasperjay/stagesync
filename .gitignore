@@ -8,3 +8,6 @@ stagesync.db
 *.db-shm
 .pytest_cache/
 .agents/
+
+cache/
+

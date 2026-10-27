@@ -7,6 +7,7 @@ Tracks execution telemetry in the pipeline_runs audit table.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import hashlib
 import logging
@@ -361,6 +362,16 @@ class PipelineCoordinator:
                     video.file_hash_sha256 = sha_hash
                     video.file_size_bytes = file_path.stat().st_size
                     video.processing_status = VideoStatus.DOWNLOADED
+
+                    with contextlib.suppress(Exception):
+                        parsed_meta = self.metadata_parser.probe_file(file_path)
+                        video.duration_seconds = parsed_meta.duration_seconds
+                        video.width = parsed_meta.width
+                        video.height = parsed_meta.height
+                        video.latitude = parsed_meta.latitude or video.latitude
+                        video.longitude = parsed_meta.longitude or video.longitude
+                        if parsed_meta.recorded_at_utc:
+                            video.recorded_at_utc = parsed_meta.recorded_at_utc
                 except Exception as e:
                     logger.error("Download failed for Drive file %s: %s", file_id, e)
                     video.processing_status = VideoStatus.FAILED
@@ -394,6 +405,15 @@ class PipelineCoordinator:
                     file_size_bytes=p.stat().st_size,
                     processing_status=VideoStatus.DOWNLOADED,
                 )
+                with contextlib.suppress(Exception):
+                    parsed_meta = self.metadata_parser.probe_file(p)
+                    v.duration_seconds = parsed_meta.duration_seconds
+                    v.width = parsed_meta.width
+                    v.height = parsed_meta.height
+                    v.latitude = parsed_meta.latitude
+                    v.longitude = parsed_meta.longitude
+                    if parsed_meta.recorded_at_utc:
+                        v.recorded_at_utc = parsed_meta.recorded_at_utc
                 saved = self.db.save_video(v)
                 found_videos.append(saved)
 
@@ -420,6 +440,17 @@ class PipelineCoordinator:
                     video.file_hash_sha256 = sha_hash
                     video.file_size_bytes = file_path_res.stat().st_size
                     video.processing_status = VideoStatus.DOWNLOADED
+
+                    with contextlib.suppress(Exception):
+                        parsed_meta = self.metadata_parser.probe_file(file_path_res)
+                        video.duration_seconds = parsed_meta.duration_seconds
+                        video.width = parsed_meta.width
+                        video.height = parsed_meta.height
+                        video.latitude = parsed_meta.latitude or video.latitude
+                        video.longitude = parsed_meta.longitude or video.longitude
+                        if parsed_meta.recorded_at_utc:
+                            video.recorded_at_utc = parsed_meta.recorded_at_utc
+
                     self.db.save_video(video)
                 except Exception as e:
                     logger.error("On-demand download failed for Drive video %s: %s", video.id, e)

@@ -55,7 +55,7 @@ class Settings(BaseModel):
         )
     )
     cache_dir: Path = Field(
-        default_factory=lambda: Path(os.getenv("CACHE_DIR", "/tmp/stagesync"))
+        default_factory=lambda: Path(os.getenv("CACHE_DIR", "/home/workspace/stagesync/cache"))
     )
 
     # Google Photos Integration

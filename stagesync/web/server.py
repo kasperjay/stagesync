@@ -803,6 +803,16 @@ HTML_PAGE = """<!DOCTYPE html>
     let statusData = {};
     let activeSelectedVideo = null;
 
+    function formatDuration(sec) {
+      if (sec === null || sec === undefined) return 'Unprobed';
+      if (sec === 0) return '0s (Still image)';
+      const s = Math.round(sec);
+      const m = Math.floor(s / 60);
+      const remS = s % 60;
+      if (m > 0) return `${m}m ${remS}s`;
+      return `${s}s`;
+    }
+
     async function loadData() {
       const refreshIcon = document.getElementById('refresh-icon');
       if (refreshIcon) refreshIcon.classList.add('animate-spin');
@@ -1000,7 +1010,7 @@ HTML_PAGE = """<!DOCTYPE html>
         const song = ident.detected_song_title || 'Unidentified Clip';
         const venue = v.venue ? `${v.venue.name}, ${v.venue.city}` : 'No venue detected';
         const conf = ident.match_confidence ? Math.round(ident.match_confidence * 100) : 0;
-        const dur = Math.round(v.duration_seconds || 0);
+        const durStr = formatDuration(v.duration_seconds);
 
         let confBadge = `<span class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-400">Score: ${conf}%</span>`;
         if (conf >= 80) {
@@ -1014,7 +1024,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <button type="button" onclick="openDrawer('${v.id}')" class="w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded-lg space-y-2.5 block">
               <div class="flex items-center justify-between text-[11px]">
                 <span class="font-mono text-zinc-400 truncate max-w-[130px]">${v.filename}</span>
-                <span class="font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[10px]">${dur}s • ${v.height || 'HD'}p</span>
+                <span class="font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[10px]">${durStr} • ${v.height ? v.height + 'p' : 'HD'}</span>
               </div>
 
               <div>
@@ -1105,7 +1115,7 @@ HTML_PAGE = """<!DOCTYPE html>
               </div>
               <div class="bg-canvas p-3 rounded-xl border border-border font-mono">
                 <span class="text-zinc-400 block text-[10px] font-sans uppercase font-semibold">Video Specs</span>
-                <span class="font-medium text-zinc-200 mt-0.5 block">${Math.round(v.duration_seconds || 0)}s • ${v.width}x${v.height}</span>
+                <span class="font-medium text-zinc-200 mt-0.5 block">${formatDuration(v.duration_seconds)} • ${v.width && v.height ? `${v.width}x${v.height}` : 'Resolution pending'}</span>
               </div>
             </div>
 
@@ -1156,7 +1166,7 @@ HTML_PAGE = """<!DOCTYPE html>
           <tr onclick="openDrawer('${v.id}')" class="hover:bg-card-hover/60 transition cursor-pointer">
             <td class="px-5 py-3.5 font-mono text-zinc-300">
               <div class="truncate max-w-[160px]">${v.filename}</div>
-              <div class="text-[10px] text-zinc-400 font-sans">${v.recorded_at_utc ? v.recorded_at_utc.substring(0, 10) : '—'}</div>
+              <div class="text-[10px] text-zinc-400 font-sans">${v.recorded_at_utc ? v.recorded_at_utc.substring(0, 10) : '—'} • ${formatDuration(v.duration_seconds)}</div>
             </td>
             <td class="px-5 py-3.5 font-medium text-zinc-200">
               <div class="font-semibold text-white truncate max-w-[200px]">${artist}</div>
@@ -1221,8 +1231,8 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('drawer-tour-name').innerText = c.tour_name || 'Individual Show';
 
       // Specs
-      document.getElementById('drawer-duration').innerText = `${Math.round(v.duration_seconds || 0)}s`;
-      document.getElementById('drawer-resolution').innerText = `${v.width || 1920}x${v.height || 1080}`;
+      document.getElementById('drawer-duration').innerText = formatDuration(v.duration_seconds);
+      document.getElementById('drawer-resolution').innerText = v.width && v.height ? `${v.width}x${v.height}` : 'Not analyzed';
       document.getElementById('drawer-recorded-time').innerText = v.recorded_at_utc ? v.recorded_at_utc.replace('T', ' ').substring(0, 16) : '—';
 
       // Pre-fill YouTube form
