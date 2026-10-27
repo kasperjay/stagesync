@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from stagesync.database.connection import Database
 from stagesync.database.models import VideoStatus
-from stagesync.ingestion.google_drive import GoogleDriveClient, _parse_date
+from stagesync.ingestion.google_drive import GoogleDriveClient, _parse_date, is_likely_video_file
 from stagesync.pipeline import PipelineCoordinator
 
 
@@ -135,6 +135,24 @@ class TestGoogleDrive(unittest.TestCase):
         db_v = self.db.get_video_by_source_id("drive_drv_999")
         self.assertIsNotNone(db_v)
         self.assertEqual(db_v.id, v.id)
+
+    def test_is_likely_video_file_filter(self) -> None:
+        """Verify is_likely_video_file rejects code, presets, and small false-positives."""
+        # False positives from Google Drive misclassification
+        self.assertFalse(is_likely_video_file("index.d.mts", "video/mp2t", 13089))
+        self.assertFalse(is_likely_video_file("esm.d.mts", "video/mp2t", 168))
+        self.assertFalse(is_likely_video_file("acorn.d.mts", "video/mp2t", 21989))
+        self.assertFalse(is_likely_video_file("03 longer throat 2.tfx", "video/mp4v-es", 432))
+        self.assertFalse(is_likely_video_file("08 naselvox.tfx", "video/mp4v-es", 432))
+        self.assertFalse(is_likely_video_file("package.json", "video/mp4", 500))
+
+        # Under min_size_bytes
+        self.assertFalse(is_likely_video_file("corrupt.mp4", "video/mp4", 50))
+
+        # Legitimate video candidates
+        self.assertTrue(is_likely_video_file("PXL_20240815_redrocks.mp4", "video/mp4", 50_000_000))
+        self.assertTrue(is_likely_video_file("IMG_1234.mov", "video/quicktime", 35_000_000))
+        self.assertTrue(is_likely_video_file("concert_clip.mkv", "video/x-matroska", 120_000_000))
 
 
 if __name__ == "__main__":

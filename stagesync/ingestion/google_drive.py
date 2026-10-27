@@ -25,6 +25,87 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 
+VALID_VIDEO_EXTENSIONS = {
+    ".mp4",
+    ".mov",
+    ".m4v",
+    ".mkv",
+    ".webm",
+    ".avi",
+    ".3gp",
+    ".wmv",
+    ".flv",
+    ".mpg",
+    ".mpeg",
+}
+
+DISALLOWED_EXTENSIONS = {
+    ".d.mts",
+    ".tfx",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".json",
+    ".xml",
+    ".txt",
+    ".md",
+    ".py",
+    ".css",
+    ".html",
+    ".zip",
+    ".tar",
+    ".gz",
+}
+
+
+def is_likely_video_file(
+    filename: str,
+    mime_type: Optional[str] = None,
+    size_bytes: Optional[int] = None,
+    min_size_bytes: int = 100_000,
+) -> bool:
+    """Validate that a candidate is a genuine video file and not code or audio presets.
+
+    Google Drive frequently misclassifies TypeScript ES Module files (.mts / .d.mts)
+    as video/mp2t (MPEG-2 Transport Stream) and DAW track preset files (.tfx)
+    as video/mp4v-es. In addition, real video recordings from concerts are almost
+    always > 1MB, never a few hundred bytes.
+    """
+    if not filename:
+        return False
+
+    lower_name = filename.lower().strip()
+
+    # Reject known non-video compound extensions (e.g., index.d.mts)
+    for bad_ext in (".d.mts", ".tfx", ".tsx", ".jsx", ".mjs", ".cjs", ".json", ".xml", ".txt", ".md"):
+        if lower_name.endswith(bad_ext):
+            return False
+
+    suffix = Path(lower_name).suffix
+
+    # If it has a standard video extension (.mp4, .mov, etc.)
+    if suffix in VALID_VIDEO_EXTENSIONS:
+        if size_bytes is not None and size_bytes < min_size_bytes:
+            return False
+        return True
+
+    # If MIME type is video/
+    if mime_type:
+        lower_mime = mime_type.lower()
+        if lower_mime.startswith("video/"):
+            # Exclude known false-positive MIME types
+            if lower_mime in ("video/mp4v-es", "video/mp2t"):
+                return False
+            if suffix in DISALLOWED_EXTENSIONS:
+                return False
+            if size_bytes is not None and size_bytes < min_size_bytes:
+                return False
+            return True
+
+    return False
+
 
 def _parse_date(date_val: Optional[Union[datetime.date, datetime.datetime, str]]) -> Optional[datetime.date]:
     """Parse various date formats into standard datetime.date."""
@@ -254,8 +335,15 @@ class GoogleDriveClient:
             "Authorization": f"Bearer {access_token}",
         }
 
-        # Build query clauses
-        query_parts = ["mimeType contains 'video/'", "trashed = false"]
+        # Build query clauses targeting real video containers while excluding code / preset false-positives
+        video_mime_clauses = (
+            "((mimeType contains 'video/' and mimeType != 'video/mp4v-es' and mimeType != 'video/mp2t') or "
+            "name contains '.mp4' or "
+            "name contains '.mov' or "
+            "name contains '.m4v' or "
+            "name contains '.mkv')"
+        )
+        query_parts = [video_mime_clauses, "trashed = false"]
 
         if folder_id:
             query_parts.append(f"'{folder_id}' in parents")
@@ -305,9 +393,18 @@ class GoogleDriveClient:
 
         res.raise_for_status()
         data = res.json()
-        items = data.get("files", [])
+        raw_items = data.get("files", [])
+        filtered_items = [
+            it
+            for it in raw_items
+            if is_likely_video_file(
+                filename=it.get("name", ""),
+                mime_type=it.get("mimeType"),
+                size_bytes=int(it.get("size", 0)) if it.get("size") else None,
+            )
+        ]
         next_token = data.get("nextPageToken")
-        return items, next_token
+        return filtered_items, next_token
 
     def download_video(
         self,

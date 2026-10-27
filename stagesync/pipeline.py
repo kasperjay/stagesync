@@ -28,7 +28,7 @@ from stagesync.database.models import (
     VideoStatus,
     YouTubeUpload,
 )
-from stagesync.ingestion.google_drive import GoogleDriveClient
+from stagesync.ingestion.google_drive import GoogleDriveClient, is_likely_video_file
 from stagesync.ingestion.google_photos import GooglePhotosClient
 from stagesync.ingestion.metadata_parser import MetadataParser, ParsedVideoMetadata
 from stagesync.intelligence.ai_audio_judge import AIAudioJudge
@@ -289,6 +289,13 @@ class PipelineCoordinator:
 
             raw_filename = item.get("name", f"drive_video_{file_id}.mp4")
             clean_filename = sanitize_filename(raw_filename)
+            file_size = int(item.get("size", 0)) if item.get("size") else None
+            mime_type = item.get("mimeType", "video/mp4")
+
+            if not is_likely_video_file(clean_filename, mime_type, file_size):
+                logger.debug("Skipping non-video Drive item: %s (%s, %s bytes)", clean_filename, mime_type, file_size)
+                continue
+
             video_meta = item.get("videoMediaMetadata") or {}
             image_meta = item.get("imageMediaMetadata") or {}
             loc = image_meta.get("location") or {}
@@ -301,12 +308,10 @@ class PipelineCoordinator:
             lat = float(loc.get("latitude")) if loc.get("latitude") is not None else None
             lng = float(loc.get("longitude")) if loc.get("longitude") is not None else None
 
-            file_size = int(item.get("size", 0)) if item.get("size") else None
-
             video = Video(
                 source_photo_id=source_id,
                 filename=clean_filename,
-                mime_type=item.get("mimeType", "video/mp4"),
+                mime_type=mime_type,
                 width=width,
                 height=height,
                 duration_seconds=duration_sec,
