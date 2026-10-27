@@ -74,6 +74,10 @@ class PipelineCoordinator:
         self.metadata_gen = MetadataGenerator()
         self.uploader = ResumableUploader(db=self.db)
 
+        # Storage
+        self.download_dir = (self.settings.cache_dir / "downloads").resolve()
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+
     def _audit_step(
         self,
         video_id: str,
@@ -301,42 +305,50 @@ class PipelineCoordinator:
             source_id = f"drive_{file_id}"
             existing = self.db.get_video_by_source_id(source_id)
             if existing:
-                continue
+                # If already downloaded and available locally, skip
+                if existing.file_path and Path(existing.file_path).exists():
+                    continue
+                # If running a dry-run and already cataloged, skip
+                if dry_run:
+                    continue
+                # Discovered in a prior dry-run and now executing live scan: download!
+                video = existing
+                clean_filename = video.filename
+            else:
+                raw_filename = item.get("name", f"drive_video_{file_id}.mp4")
+                clean_filename = sanitize_filename(raw_filename)
+                file_size = int(item.get("size", 0)) if item.get("size") else None
+                mime_type = item.get("mimeType", "video/mp4")
 
-            raw_filename = item.get("name", f"drive_video_{file_id}.mp4")
-            clean_filename = sanitize_filename(raw_filename)
-            file_size = int(item.get("size", 0)) if item.get("size") else None
-            mime_type = item.get("mimeType", "video/mp4")
+                if not is_likely_video_file(clean_filename, mime_type, file_size):
+                    logger.debug("Skipping non-video Drive item: %s (%s, %s bytes)", clean_filename, mime_type, file_size)
+                    continue
 
-            if not is_likely_video_file(clean_filename, mime_type, file_size):
-                logger.debug("Skipping non-video Drive item: %s (%s, %s bytes)", clean_filename, mime_type, file_size)
-                continue
+                video_meta = item.get("videoMediaMetadata") or {}
+                image_meta = item.get("imageMediaMetadata") or {}
+                loc = image_meta.get("location") or {}
 
-            video_meta = item.get("videoMediaMetadata") or {}
-            image_meta = item.get("imageMediaMetadata") or {}
-            loc = image_meta.get("location") or {}
+                width = int(video_meta.get("width", 0)) or None
+                height = int(video_meta.get("height", 0)) or None
+                duration_ms = float(video_meta.get("durationMillis", 0)) or 0.0
+                duration_sec = duration_ms / 1000.0 if duration_ms > 0 else None
 
-            width = int(video_meta.get("width", 0)) or None
-            height = int(video_meta.get("height", 0)) or None
-            duration_ms = float(video_meta.get("durationMillis", 0)) or 0.0
-            duration_sec = duration_ms / 1000.0 if duration_ms > 0 else None
+                lat = float(loc.get("latitude")) if loc.get("latitude") is not None else None
+                lng = float(loc.get("longitude")) if loc.get("longitude") is not None else None
 
-            lat = float(loc.get("latitude")) if loc.get("latitude") is not None else None
-            lng = float(loc.get("longitude")) if loc.get("longitude") is not None else None
-
-            video = Video(
-                source_photo_id=source_id,
-                filename=clean_filename,
-                mime_type=mime_type,
-                width=width,
-                height=height,
-                duration_seconds=duration_sec,
-                latitude=lat,
-                longitude=lng,
-                file_size_bytes=file_size,
-                recorded_at_utc=item.get("createdTime"),
-                processing_status=VideoStatus.DISCOVERED,
-            )
+                video = Video(
+                    source_photo_id=source_id,
+                    filename=clean_filename,
+                    mime_type=mime_type,
+                    width=width,
+                    height=height,
+                    duration_seconds=duration_sec,
+                    latitude=lat,
+                    longitude=lng,
+                    file_size_bytes=file_size,
+                    recorded_at_utc=item.get("createdTime"),
+                    processing_status=VideoStatus.DISCOVERED,
+                )
 
             if dry_run:
                 video.processing_status = VideoStatus.DISCOVERED
@@ -396,9 +408,27 @@ class PipelineCoordinator:
         logger.info("Starting processing pipeline for video %s (%s)", video.id, video.filename)
 
         if not video.file_path or not Path(video.file_path).exists():
-            logger.warning("Video file not available locally for %s", video.id)
-            self.db.update_video_status(video.id, VideoStatus.FAILED)
-            return video
+            # If candidate was cataloged from Google Drive during dry-run, download binary on-demand
+            if video.source_photo_id and video.source_photo_id.startswith("drive_"):
+                drive_file_id = video.source_photo_id.replace("drive_", "")
+                target_file = self.download_dir / f"{video.id}_{video.filename}"
+                try:
+                    logger.info("On-demand downloading Drive video %s (%s)...", video.id, video.filename)
+                    self.db.update_video_status(video.id, VideoStatus.DOWNLOADING)
+                    file_path_res, sha_hash = self.drive_client.download_video(drive_file_id, target_file)
+                    video.file_path = str(file_path_res)
+                    video.file_hash_sha256 = sha_hash
+                    video.file_size_bytes = file_path_res.stat().st_size
+                    video.processing_status = VideoStatus.DOWNLOADED
+                    self.db.save_video(video)
+                except Exception as e:
+                    logger.error("On-demand download failed for Drive video %s: %s", video.id, e)
+                    self.db.update_video_status(video.id, VideoStatus.FAILED)
+                    return video
+            else:
+                logger.warning("Video file not available locally for %s", video.id)
+                self.db.update_video_status(video.id, VideoStatus.FAILED)
+                return video
 
         file_path = Path(video.file_path)
 
