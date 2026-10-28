@@ -773,28 +773,30 @@ class PipelineCoordinator:
                         if song_entry.get("name"):
                             candidate_song_list.append(song_entry.get("name"))
 
-            if (not setlist_verified or confidence < 0.85) and candidate_song_list:
+            artist_for_ai = matched_concert.headliner_artist if matched_concert else detected_artist
+
+            if (not setlist_verified or confidence < 0.85) and (candidate_song_list or artist_for_ai):
                 def step_llm():
                     nonlocal detected_song, detected_artist, confidence, service_used
                     nonlocal setlist_verified, track_number, lyrics_snippet, raw_payload
                     ai_res = self.ai_audio_judge.evaluate_live_clip(
                         audio_path=audio_clip_path,
                         candidate_songs=candidate_song_list,
-                        artist_name=matched_concert.headliner_artist,
+                        artist_name=artist_for_ai or "Live Artist",
                         venue_name=resolved_venue.name if resolved_venue else "Concert Venue",
-                        event_date=matched_concert.event_date,
+                        event_date=matched_concert.event_date if matched_concert else "",
                     )
                     if ai_res.matched:
                         detected_song = ai_res.song_title
-                        detected_artist = matched_concert.headliner_artist
+                        detected_artist = artist_for_ai or detected_artist
                         confidence = ai_res.confidence
                         service_used = "gemini_multimodal"
-                        setlist_verified = True
+                        setlist_verified = bool(candidate_song_list and ai_res.setlist_index)
                         track_number = ai_res.setlist_index
                         lyrics_snippet = ai_res.lyrics_detected
                         raw_payload = ai_res.raw_payload
                         return StepStatus.SUCCESS, ai_res.model_dump(), None
-                    return StepStatus.SKIPPED, {"message": "AI could not disambiguate"}, None
+                    return StepStatus.SKIPPED, {"message": ai_res.reasoning or "AI could not disambiguate"}, None
 
                 self._audit_step(video.id, PipelineStep.LLM_DISAMBIGUATION, step_llm)
 

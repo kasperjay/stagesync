@@ -38,10 +38,10 @@ class AIAudioJudgeResult(BaseModel):
 class AIAudioJudge:
     """Evaluates noisy live audio against a concert's setlist using Gemini Flash."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-2.5-flash") -> None:
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None) -> None:
         settings = get_settings()
         self.api_key = api_key if api_key is not None else settings.gemini_api_key
-        self.model = model
+        self.model = model if model is not None else getattr(settings, "gemini_model", "gemini-2.5-flash")
 
     def evaluate_live_clip(
         self,
@@ -56,26 +56,36 @@ class AIAudioJudge:
         if not path.exists():
             raise FileNotFoundError(f"Audio file not found: {path}")
 
-        if not candidate_songs:
-            logger.info("No setlist songs provided for AI constraint; skipping AI audio judge.")
-            return AIAudioJudgeResult(matched=False, confidence=0.0)
-
         if not self.api_key:
             logger.info("GEMINI_API_KEY not configured; using heuristic setlist fallback.")
-            return self._heuristic_fallback(candidate_songs)
+            return self._heuristic_fallback(candidate_songs, reason="AI judge key not configured; setlist available for manual selection.")
 
-        # Build prompt listing the candidate setlist songs
-        setlist_listing = "\n".join(
-            f"{i + 1}. {song}" for i, song in enumerate(candidate_songs)
-        )
+        if not candidate_songs and not artist_name:
+            logger.info("Neither setlist songs nor artist name provided; skipping AI audio judge.")
+            return AIAudioJudgeResult(matched=False, confidence=0.0, reasoning="No artist or candidate songs provided.")
+
+        # Build prompt listing the candidate setlist songs or artist catalog instruction
+        if candidate_songs:
+            setlist_listing = "\n".join(
+                f"{i + 1}. {song}" for i, song in enumerate(candidate_songs)
+            )
+            setlist_context = (
+                f"Their exact setlist for this concert was:\n{setlist_listing}\n\n"
+                f"Identify which of the setlist songs (or encore/tape intro) is being performed."
+            )
+        else:
+            setlist_context = (
+                f"No pre-compiled setlist is available for this show. "
+                f"Analyze {artist_name}'s catalog/discography and musical signature to identify which song is being performed."
+            )
 
         prompt_text = (
             f"You are an expert musicologist and live concert sound engineer.\n"
             f"Attached is a 30-second live audio recording taken at {venue_name} on {event_date}.\n"
             f"The artist performing is {artist_name}.\n"
-            f"Their exact setlist for this concert was:\n{setlist_listing}\n\n"
+            f"{setlist_context}\n\n"
             f"Listen to the audio snippet (vocals, guitar riffs, drum beats, lyrics sung, bassline).\n"
-            f"Identify which of the setlist songs (or encore/tape intro) is being performed.\n"
+            f"Identify which song is being performed.\n"
             f"Output JSON format strictly conforming to:\n"
             f'{{\n  "song_title": "string",\n  "confidence": 0.0 to 1.0,\n  "setlist_index": 1,\n  "lyrics_detected": "string",\n  "reasoning": "string"\n}}'
         )
@@ -108,7 +118,7 @@ class AIAudioJudge:
                 },
             }
 
-            res = requests.post(url, json=payload, timeout=25.0)
+            res = requests.post(url, json=payload, timeout=60.0)
             res.raise_for_status()
             data = res.json()
 
@@ -119,6 +129,7 @@ class AIAudioJudge:
 
         except Exception as e:
             logger.warning("Gemini AI audio judge request failed: %s", e)
+            return self._heuristic_fallback(candidate_songs, reason=f"Gemini API request error: {e}")
 
         return self._heuristic_fallback(candidate_songs)
 
@@ -148,14 +159,16 @@ class AIAudioJudge:
 
             # Check if title matches one of the candidate songs
             matched = False
-            for idx, c in enumerate(candidate_songs):
-                if c.lower() == title.lower() or c.lower() in title.lower():
-                    matched = True
-                    if setlist_index is None:
-                        setlist_index = idx + 1
-                    break
+            if candidate_songs:
+                for idx, c in enumerate(candidate_songs):
+                    if c.lower() == title.lower() or c.lower() in title.lower():
+                        matched = True
+                        if setlist_index is None:
+                            setlist_index = idx + 1
+                        break
 
-            if not matched and confidence >= 0.70:
+            # If no setlist candidate matched (or setlist was empty), allow high confidence identification
+            if not matched and confidence >= 0.70 and title and title.lower() not in ("unidentifiable", "unknown", "none"):
                 matched = True
 
             return AIAudioJudgeResult(
@@ -170,15 +183,24 @@ class AIAudioJudge:
             )
         except Exception as e:
             logger.warning("Failed to parse Gemini output: %s", e)
-            return self._heuristic_fallback(candidate_songs)
+            return self._heuristic_fallback(candidate_songs, reason=f"Failed to parse Gemini output: {e}")
 
-    def _heuristic_fallback(self, candidate_songs: List[str]) -> AIAudioJudgeResult:
+    def _heuristic_fallback(self, candidate_songs: List[str], reason: Optional[str] = None) -> AIAudioJudgeResult:
         """Fallback when Gemini is unavailable or not configured."""
         if not candidate_songs:
-            return AIAudioJudgeResult(matched=False, confidence=0.0)
+            return AIAudioJudgeResult(
+                matched=False,
+                confidence=0.0,
+                reasoning=reason or "No candidates available for identification.",
+            )
         # Without model, cannot reliably pick from candidates without acoustic signature
+        default_reason = (
+            "AI judge key not configured; setlist available for manual selection."
+            if not self.api_key
+            else "Audio could not be disambiguated against setlist."
+        )
         return AIAudioJudgeResult(
             matched=False,
             confidence=0.0,
-            reasoning="AI judge key not configured; setlist available for manual selection.",
+            reasoning=reason or default_reason,
         )

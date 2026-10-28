@@ -159,6 +159,9 @@ class Settings(BaseModel):
     gemini_api_key: Optional[str] = Field(
         default_factory=lambda: os.getenv("GEMINI_API_KEY")
     )
+    gemini_model: str = Field(
+        default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    )
 
     # Pipeline Policies
     default_privacy: str = Field(
@@ -208,10 +211,17 @@ class Settings(BaseModel):
 _SETTINGS_INSTANCE: Optional[Settings] = None
 
 
-def get_settings() -> Settings:
+def get_settings(reload: bool = False) -> Settings:
     """Retrieve or initialize singleton Settings instance."""
     global _SETTINGS_INSTANCE
-    if _SETTINGS_INSTANCE is None:
+    if reload or _SETTINGS_INSTANCE is None:
+        if _WORKSPACE_ENV.exists():
+            load_dotenv(_WORKSPACE_ENV, override=True)
         _SETTINGS_INSTANCE = Settings()
         _SETTINGS_INSTANCE.ensure_directories()
     return _SETTINGS_INSTANCE
+
+
+def reload_settings() -> Settings:
+    """Force reload settings from environment and disk."""
+    return get_settings(reload=True)
