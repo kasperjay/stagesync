@@ -427,12 +427,63 @@ def cmd_review(args: argparse.Namespace) -> None:
         console.print("-" * 80)
 
         # Action Prompt
-        console.print("[bold white][A][/bold white] Approve & Queue Upload   [bold white][V][/bold white] Set/Search Venue   [bold white][E][/bold white] Edit Metadata   [bold white][P][/bold white] Change Privacy   [bold white][R][/bold white] Reject   [bold white][S][/bold white] Skip")
-        choice = Prompt.ask("Selection", choices=["a", "v", "e", "p", "r", "s", "A", "V", "E", "P", "R", "S"], default="a").lower()
+        console.print("[bold white][A][/bold white] Approve & Queue Upload   [bold white][B][/bold white] Which band is this?   [bold white][V][/bold white] Set/Search Venue   [bold white][E][/bold white] Edit Metadata   [bold white][P][/bold white] Change Privacy   [bold white][R][/bold white] Reject   [bold white][S][/bold white] Skip")
+        choice = Prompt.ask("Selection", choices=["a", "b", "v", "e", "p", "r", "s", "A", "B", "V", "E", "P", "R", "S"], default="a").lower()
 
         if choice == "a":
             coordinator.approve_video(vid.id)
             console.print("[bold green]✓ Approved for upload.[/bold green]\n")
+        elif choice == "b":
+            if not concert:
+                console.print("[yellow]No concert associated with this video yet. Use [V] to set venue and find concert first.[/yellow]\n")
+                continue
+
+            # Gather lineup artists
+            bands = list(concert.lineup_artists or [])
+            if concert.headliner_artist and concert.headliner_artist not in bands:
+                bands.insert(0, concert.headliner_artist)
+
+            if not bands:
+                console.print(f"[yellow]No lineup found for this show ({concert.headliner_artist}). Enter band name manually:[/yellow]")
+                chosen_band = Prompt.ask("Performing Band Name")
+            else:
+                table = Table(title=f"Lineup for {concert.headliner_artist} ({concert.event_date or 'Show'})", box=box.ROUNDED)
+                table.add_column("#", style="bold cyan", justify="right")
+                table.add_column("Band / Artist", style="bold white")
+                table.add_column("Role", style="yellow")
+
+                for b_idx, band_name in enumerate(bands, start=1):
+                    role = "Headliner" if (concert.headliner_artist and band_name.lower() == concert.headliner_artist.lower()) else "Lineup / Support"
+                    table.add_row(str(b_idx), band_name, role)
+
+                table.add_row("C", "Custom / Unlisted Opener", "Manual Entry")
+                console.print(table)
+
+                valid_band_choices = [str(i) for i in range(1, len(bands) + 1)] + ["c", "C", "0"]
+                b_choice = Prompt.ask(
+                    "Which band is this? Select number, 'C' for custom, or 0 to cancel",
+                    choices=valid_band_choices,
+                    default="1",
+                )
+                if b_choice == "0":
+                    console.print("[dim]Cancelled band selection.[/dim]\n")
+                    continue
+
+                if b_choice.lower() == "c":
+                    chosen_band = Prompt.ask("Enter performing band name")
+                else:
+                    chosen_band = bands[int(b_choice) - 1]
+
+            with console.status(f"[bold green]Assigning band '{chosen_band}' and updating YouTube draft metadata...[/bold green]"):
+                up_vid, up_concert, up_ident = coordinator.reidentify_video_with_band(
+                    video_id=vid.id,
+                    artist_name=chosen_band,
+                )
+            console.print(f"[bold green]✓ Band set to:[/bold green] [bold cyan]{chosen_band}[/bold cyan]")
+            upload_job = db.get_youtube_upload_by_video_id(vid.id)
+            if upload_job:
+                console.print(f"  Target YouTube Title: [bold cyan]{upload_job.title}[/bold cyan]")
+            console.print("[dim]Candidate updated. You can approve it now or inspect further.[/dim]\n")
         elif choice == "v":
             cur_venue = venue.name if venue else ""
             v_query = Prompt.ask("Search venue name (e.g. 'Come and Take It Live')", default=cur_venue if venue else "")

@@ -641,6 +641,23 @@ HTML_PAGE = """<!DOCTYPE html>
           </div>
         </div>
 
+        <!-- Which band is this? (Concert Lineup Assistant) -->
+        <div id="drawer-band-assist-section" class="hidden bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-[10px] font-bold tracking-wider uppercase text-amber-400 flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+              Which band is this?
+            </span>
+            <button type="button" onclick="openBandAssistModal(activeSelectedVideo ? activeSelectedVideo.id : '')" class="text-[10px] text-amber-300 font-semibold hover:underline flex items-center gap-1">
+              Still Preview →
+            </button>
+          </div>
+          <p class="text-[11px] text-zinc-300 leading-snug">Concert matched, but song/performer is unconfirmed. Select who performed in this clip:</p>
+          <div id="drawer-band-chips" class="flex flex-wrap gap-1.5 pt-1">
+            <!-- Dynamic band buttons -->
+          </div>
+        </div>
+
         <!-- Video Technical Specs -->
         <div class="bg-card-subtle border border-border rounded-2xl p-4 space-y-3">
           <div class="text-[10px] font-bold tracking-wider uppercase text-zinc-400">Media Specifications</div>
@@ -884,6 +901,91 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- ================================================================= -->
+  <!-- USER-ASSIST BAND SELECTION MODAL ("Which band is this?")         -->
+  <!-- ================================================================= -->
+  <div id="band-assist-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-card border border-border rounded-2xl max-w-lg w-full p-6 shadow-2xl relative space-y-4 animate-in fade-in zoom-in-95 duration-150">
+      
+      <!-- Modal Header -->
+      <div class="flex items-start justify-between border-b border-border pb-3">
+        <div>
+          <div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 mb-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+            LINEUP IDENTIFICATION
+          </div>
+          <h3 class="text-lg font-bold text-white tracking-tight">Which band is this?</h3>
+          <p id="band-assist-subtitle" class="text-xs text-zinc-400 mt-0.5">Select from the artists who performed at this show.</p>
+        </div>
+        <button onclick="closeBandAssistModal()" class="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-zinc-800 transition">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+
+      <!-- Video Still Preview -->
+      <div class="relative rounded-xl overflow-hidden border border-border bg-black/50 aspect-video flex items-center justify-center">
+        <img id="band-assist-thumbnail" src="" alt="Video Frame Preview" class="w-full h-full object-cover" />
+        <div class="absolute bottom-2 left-2 right-2 flex items-center justify-between pointer-events-none">
+          <span id="band-assist-filename-tag" class="px-2 py-1 rounded bg-black/80 backdrop-blur text-[10px] font-mono text-zinc-200 border border-white/10 truncate max-w-[200px]">video.mov</span>
+          <span id="band-assist-meta-tag" class="px-2 py-1 rounded bg-black/80 backdrop-blur text-[10px] font-mono text-zinc-300 border border-white/10">00:00</span>
+        </div>
+      </div>
+
+      <!-- Matched Show Details -->
+      <div class="bg-card-subtle border border-border rounded-xl p-3 text-xs space-y-1">
+        <div class="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">Matched Concert Show</div>
+        <div id="band-assist-show-title" class="font-bold text-zinc-100 text-sm">Attila — About That Life 10 Year Anniversary</div>
+        <div id="band-assist-show-venue" class="text-[11px] text-brand-400">Come and Take It Live • Austin, TX • 2023-10-13</div>
+      </div>
+
+      <!-- Bands List -->
+      <div class="space-y-2">
+        <label class="text-xs font-semibold text-zinc-300 flex items-center justify-between">
+          <span>Show Lineup</span>
+          <span class="text-[10px] text-zinc-400 font-normal">Select the band performing in this footage</span>
+        </label>
+        <div id="band-options-container" class="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+          <!-- Dynamic band cards -->
+        </div>
+      </div>
+
+      <!-- Custom / Opener Input -->
+      <div class="pt-1">
+        <div class="flex items-center gap-2">
+          <input
+            type="text"
+            id="band-custom-input"
+            placeholder="Or type unlisted opener / performer name..."
+            class="flex-1 bg-canvas border border-border rounded-xl px-3 py-2 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 font-sans"
+            onkeydown="if(event.key==='Enter') selectCustomBandFromInput()"
+          />
+          <button
+            type="button"
+            onclick="selectCustomBandFromInput()"
+            class="px-3.5 py-2 text-xs font-semibold rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition"
+          >
+            Select
+          </button>
+        </div>
+      </div>
+
+      <!-- Selected Performer Confirmation -->
+      <div id="band-selected-preview" class="hidden p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs space-y-1">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-amber-400">Selected Performing Artist</div>
+        <div id="band-selected-name" class="font-bold text-white text-sm">Band Name</div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="flex items-center justify-between pt-2 border-t border-border">
+        <button type="button" onclick="closeBandAssistModal()" class="px-4 py-2 text-xs font-semibold rounded-xl bg-card border border-border text-zinc-300 hover:bg-zinc-800 transition">Cancel</button>
+        <button type="button" id="btn-confirm-set-band" onclick="confirmSetBand()" disabled class="px-5 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-amber-500 to-brand-600 text-white shadow-md shadow-brand-500/20 disabled:opacity-50 disabled:pointer-events-none hover:from-amber-400 hover:to-brand-500 transition flex items-center gap-2">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+          Confirm Band Selection
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script>
     let activeTab = 'board';
     let activeStatusFilter = 'ALL';
@@ -900,6 +1002,27 @@ HTML_PAGE = """<!DOCTYPE html>
       const remS = s % 60;
       if (m > 0) return `${m}m ${remS}s`;
       return `${s}s`;
+    }
+
+    function isUnidentifiedSong(v) {
+      if (!v) return false;
+      const c = v.concert;
+      if (!c || !c.headliner_artist) return false;
+      const ident = v.identification || {};
+      const song = (ident.detected_song_title || '').trim().toLowerCase();
+      const unassigned = !song || song === 'live performance' || song === 'unidentified clip' || song === 'unidentified song' || song === 'unknown';
+      return unassigned || !ident.match_confidence || ident.match_confidence < 0.50;
+    }
+
+    function getShowBands(v) {
+      if (!v) return [];
+      const c = v.concert;
+      if (!c) return [];
+      const list = [...(c.lineup_artists || [])];
+      if (c.headliner_artist && !list.includes(c.headliner_artist)) {
+        list.unshift(c.headliner_artist);
+      }
+      return list.length > 0 ? list : (c.headliner_artist ? [c.headliner_artist] : []);
     }
 
     async function loadData() {
@@ -1101,6 +1224,7 @@ HTML_PAGE = """<!DOCTYPE html>
         const conf = ident.match_confidence ? Math.round(ident.match_confidence * 100) : 0;
         const durStr = formatDuration(v.duration_seconds);
         const hasKnownVenue = v.venue && v.venue.name && !v.venue.name.startsWith('Venue near');
+        const needsBandAssist = isUnidentifiedSong(v);
 
         let confBadge = `<span class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-400">Score: ${conf}%</span>`;
         if (conf >= 80) {
@@ -1140,6 +1264,11 @@ HTML_PAGE = """<!DOCTYPE html>
             <div class="pt-2 border-t border-border/50 flex items-center justify-between gap-1">
               ${confBadge}
               <div class="flex items-center gap-1">
+                ${needsBandAssist ? `
+                  <button type="button" onclick="event.stopPropagation(); openBandAssistModal('${v.id}')" title="Which band is this?" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 transition">
+                    Band?
+                  </button>
+                ` : ''}
                 <button type="button" onclick="event.stopPropagation(); openVenueAssistModal('${v.id}')" title="Assist venue identification" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/20 transition">
                   Venue
                 </button>
@@ -1186,6 +1315,8 @@ HTML_PAGE = """<!DOCTYPE html>
         const song = ident.detected_song_title || 'Live Performance';
         const venue = v.venue ? `${v.venue.name}, ${v.venue.city}` : 'Unknown Venue';
         const date = c.event_date || (v.recorded_at_utc ? v.recorded_at_utc.substring(0, 10) : 'Unknown Date');
+        const needsBandAssist = isUnidentifiedSong(v);
+        const showBands = needsBandAssist ? getShowBands(v) : [];
 
         return `
           <div class="bg-card border border-border rounded-2xl p-5 hover:border-zinc-700 transition space-y-4 shadow-sm">
@@ -1241,6 +1372,28 @@ HTML_PAGE = """<!DOCTYPE html>
                     <span class="font-medium text-zinc-200 mt-0.5 block">${formatDuration(v.duration_seconds)} • ${v.width && v.height ? `${v.width}x${v.height}` : 'HD'}</span>
                   </div>
                 </div>
+
+                ${needsBandAssist ? `
+                  <div class="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 space-y-2">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-bold text-amber-400 flex items-center gap-1.5">
+                        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+                        Which band is this? (Concert Matched • Song Unconfirmed)
+                      </span>
+                      <button type="button" onclick="openBandAssistModal('${v.id}')" class="text-xs text-amber-300 font-semibold hover:underline flex items-center gap-1">
+                        Still & Full Lineup →
+                      </button>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 items-center">
+                      <span class="text-[11px] text-zinc-400 mr-1">Select lineup artist:</span>
+                      ${showBands.map(b => `
+                        <button type="button" onclick="quickSetBand('${v.id}', '${b.replace(/'/g, "\\'")}')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-zinc-800 hover:bg-amber-500 hover:text-black text-zinc-200 border border-zinc-700 transition">
+                          ${b}
+                        </button>
+                      `).join('')}
+                    </div>
+                  </div>
+                ` : ''}
               </div>
             </div>
 
@@ -1255,6 +1408,12 @@ HTML_PAGE = """<!DOCTYPE html>
                   <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                   <span>What venue is this?</span>
                 </button>
+                ${needsBandAssist ? `
+                  <button onclick="openBandAssistModal('${v.id}')" class="text-xs text-amber-400 hover:text-amber-300 font-semibold flex items-center gap-1">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+                    <span>Which band is this?</span>
+                  </button>
+                ` : ''}
               </div>
               <div class="flex items-center gap-2">
                 <button onclick="rejectVideo('${v.id}')" class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-card-subtle hover:bg-rose-950/40 hover:text-rose-300 hover:border-rose-800 border border-border transition">
@@ -1371,6 +1530,31 @@ HTML_PAGE = """<!DOCTYPE html>
       const drawerThumb = document.getElementById('drawer-thumbnail');
       if (drawerThumb) {
         drawerThumb.src = `/api/video/${v.id}/thumbnail?t=${Date.now()}`;
+      }
+
+      // Lineup band assistance
+      const bandAssistSection = document.getElementById('drawer-band-assist-section');
+      const bandChips = document.getElementById('drawer-band-chips');
+      if (bandAssistSection && bandChips) {
+        if (isUnidentifiedSong(v)) {
+          bandAssistSection.classList.remove('hidden');
+          const bands = getShowBands(v);
+          const currentArtist = (ident.detected_artist || '').toLowerCase();
+          bandChips.innerHTML = bands.map(b => {
+            const isCurrent = (currentArtist === b.toLowerCase());
+            return `
+              <button type="button" onclick="quickSetBand('${v.id}', '${b.replace(/'/g, "\\'")}')" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                isCurrent
+                  ? 'bg-amber-500 text-black shadow-sm'
+                  : 'bg-zinc-800 hover:bg-amber-500/20 text-zinc-200 hover:text-amber-300 border border-zinc-700 hover:border-amber-500/40'
+              }">
+                ${b}${isCurrent ? ' ✓' : ''}
+              </button>
+            `;
+          }).join('');
+        } else {
+          bandAssistSection.classList.add('hidden');
+        }
       }
 
       // Pre-fill YouTube form
@@ -1662,6 +1846,171 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     // =================================================================
+    // USER-ASSIST BAND SELECTION ("Which band is this?")
+    // =================================================================
+    let activeBandAssistVideoId = null;
+    let selectedBandName = null;
+
+    function openBandAssistModal(id) {
+      if (!id && activeSelectedVideo) id = activeSelectedVideo.id;
+      const v = videosData.find(item => item.id === id);
+      if (!v) return;
+
+      activeBandAssistVideoId = id;
+      selectedBandName = null;
+
+      const thumbImg = document.getElementById('band-assist-thumbnail');
+      if (thumbImg) {
+        thumbImg.src = `/api/video/${id}/thumbnail?t=${Date.now()}`;
+      }
+
+      document.getElementById('band-assist-filename-tag').innerText = v.filename || 'video.mov';
+      const dur = formatDuration(v.duration_seconds);
+      const dateStr = v.recorded_at_local ? v.recorded_at_local.substring(0, 10) : (v.recorded_at_utc ? v.recorded_at_utc.substring(0, 10) : '');
+      document.getElementById('band-assist-meta-tag').innerText = `${dur} • ${dateStr}`;
+
+      const c = v.concert || {};
+      const showTitle = c.tour_name ? `${c.headliner_artist || 'Concert'} — ${c.tour_name}` : (c.headliner_artist ? `${c.headliner_artist} Live` : 'Concert Show');
+      document.getElementById('band-assist-show-title').innerText = showTitle;
+
+      const venueText = v.venue ? `${v.venue.name} • ${v.venue.city || ''} • ${c.event_date || dateStr}` : (c.event_date || dateStr);
+      document.getElementById('band-assist-show-venue').innerText = venueText;
+
+      document.getElementById('band-custom-input').value = '';
+      document.getElementById('band-selected-preview').classList.add('hidden');
+      document.getElementById('btn-confirm-set-band').disabled = true;
+
+      const bands = getShowBands(v);
+      const container = document.getElementById('band-options-container');
+
+      if (bands.length === 0) {
+        container.innerHTML = `
+          <div class="p-3 rounded-xl bg-card-subtle border border-border text-center text-xs text-zinc-400">
+            No lineup artists found for this show. Type a band name below.
+          </div>
+        `;
+      } else {
+        const ident = v.identification || {};
+        const currentArtist = ident.detected_artist || '';
+
+        container.innerHTML = bands.map((band, idx) => {
+          const isHeadliner = (c.headliner_artist && band.toLowerCase() === c.headliner_artist.toLowerCase());
+          const isCurrent = (currentArtist && band.toLowerCase() === currentArtist.toLowerCase());
+
+          return `
+            <div id="band-opt-${idx}" onclick="selectBandOption('${band.replace(/'/g, "\\'")}', ${idx})" class="p-2.5 rounded-xl bg-card-subtle hover:bg-card-hover border border-border hover:border-amber-500/50 cursor-pointer transition flex items-center justify-between gap-3 group">
+              <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-lg bg-zinc-800 flex items-center justify-center text-xs font-mono font-bold text-zinc-400 group-hover:text-amber-400 group-hover:bg-amber-500/10 transition">
+                  ${idx + 1}
+                </span>
+                <div>
+                  <div class="font-bold text-xs text-zinc-100 group-hover:text-amber-300 transition flex items-center gap-2">
+                    <span>${band}</span>
+                    ${isHeadliner ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono uppercase bg-amber-500/10 text-amber-400 border border-amber-500/20">Headliner</span>` : ''}
+                    ${isCurrent ? `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Current</span>` : ''}
+                  </div>
+                </div>
+              </div>
+              <button type="button" class="px-2.5 py-1 rounded-lg bg-zinc-800 group-hover:bg-amber-600 text-[11px] font-semibold text-zinc-300 group-hover:text-white transition flex-shrink-0">
+                Select
+              </button>
+            </div>
+          `;
+        }).join('');
+      }
+
+      document.getElementById('band-assist-modal').classList.remove('hidden');
+    }
+
+    function closeBandAssistModal() {
+      document.getElementById('band-assist-modal').classList.add('hidden');
+      activeBandAssistVideoId = null;
+      selectedBandName = null;
+    }
+
+    function selectBandOption(bandName, optIdx) {
+      selectedBandName = bandName;
+      document.getElementById('band-selected-name').innerText = bandName;
+      document.getElementById('band-selected-preview').classList.remove('hidden');
+      document.getElementById('btn-confirm-set-band').disabled = false;
+
+      const container = document.getElementById('band-options-container');
+      if (container) {
+        const cards = container.children;
+        for (let i = 0; i < cards.length; i++) {
+          if (optIdx !== undefined && i === optIdx) {
+            cards[i].classList.add('border-amber-500', 'bg-amber-500/10');
+          } else {
+            cards[i].classList.remove('border-amber-500', 'bg-amber-500/10');
+          }
+        }
+      }
+    }
+
+    function selectCustomBandFromInput() {
+      const input = document.getElementById('band-custom-input');
+      const val = (input ? input.value : '').trim();
+      if (!val) return;
+      selectBandOption(val);
+    }
+
+    async function confirmSetBand() {
+      if (!activeBandAssistVideoId || !selectedBandName) return;
+
+      const btn = document.getElementById('btn-confirm-set-band');
+      const origText = btn.innerHTML;
+      btn.innerHTML = `<span>⏳ Updating Band...</span>`;
+      btn.disabled = true;
+
+      try {
+        const res = await fetch(`/api/video/${activeBandAssistVideoId}/set-band`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ artist_name: selectedBandName })
+        });
+        const data = await res.json();
+        if (!data.success) {
+          alert('Failed to set band: ' + (data.error || 'Server error'));
+          return;
+        }
+
+        const vidId = activeBandAssistVideoId;
+        closeBandAssistModal();
+        await loadData();
+
+        if (activeSelectedVideo && activeSelectedVideo.id === vidId) {
+          openDrawer(vidId);
+        }
+      } catch (err) {
+        alert('Failed to update band: ' + err);
+      } finally {
+        btn.innerHTML = origText;
+        btn.disabled = false;
+      }
+    }
+
+    async function quickSetBand(videoId, bandName) {
+      try {
+        const res = await fetch(`/api/video/${videoId}/set-band`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ artist_name: bandName })
+        });
+        const data = await res.json();
+        if (!data.success) {
+          alert('Failed to set band: ' + (data.error || 'Server error'));
+          return;
+        }
+        await loadData();
+        if (activeSelectedVideo && activeSelectedVideo.id === videoId) {
+          openDrawer(videoId);
+        }
+      } catch (err) {
+        alert('Failed to update band: ' + err);
+      }
+    }
+
+    // =================================================================
     // SCAN & INGESTION MODAL
     // =================================================================
     function openScanModal() {
@@ -1854,6 +2203,7 @@ HTML_PAGE = """<!DOCTYPE html>
         closeDrawer();
         closeScanModal();
         closeVenueAssistModal();
+        closeBandAssistModal();
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
@@ -1893,6 +2243,7 @@ def create_app(
     app.router.add_post("/api/video/{id}/approve", handle_approve_video)
     app.router.add_post("/api/video/{id}/reject", handle_reject_video)
     app.router.add_post("/api/video/{id}/set-venue", handle_set_video_venue)
+    app.router.add_post("/api/video/{id}/set-band", handle_set_video_band)
     app.router.add_post("/api/scan", handle_trigger_scan)
     app.router.add_post("/api/picker/create", handle_picker_create)
     app.router.add_post("/api/picker/poll", handle_picker_poll)
@@ -2159,6 +2510,35 @@ async def handle_set_video_venue(request: web.Request) -> web.Response:
         })
     except Exception as e:
         logger.exception("Failed to set venue for video %s: %s", video_id, e)
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+async def handle_set_video_band(request: web.Request) -> web.Response:
+    """Assign specific performing band to video from show lineup."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    video_id = request.match_info["id"]
+
+    body = await request.json() if request.can_read_body else {}
+    artist_name = (body.get("artist_name") or "").strip()
+    if not artist_name:
+        return web.json_response({"success": False, "error": "Missing artist_name"}, status=400)
+
+    song_title = body.get("song_title")
+
+    try:
+        video, concert, ident = coordinator.reidentify_video_with_band(
+            video_id=video_id,
+            artist_name=artist_name,
+            song_title=song_title,
+        )
+        return web.json_response({
+            "success": True,
+            "video": serialize_model(video),
+            "concert": serialize_model(concert),
+            "identification": serialize_model(ident),
+        })
+    except Exception as e:
+        logger.exception("Failed to set band for video %s: %s", video_id, e)
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
 

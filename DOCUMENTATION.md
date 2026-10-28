@@ -382,6 +382,25 @@ Within `stagesync review`:
 - Presents candidate venues in a rich table with numbered selection.
 - Immediately applies re-identification and outputs the matched artist and concert.
 
+### 7.3 Lineup Identification ("Which band is this?")
+For videos where a concert was correlated but acoustic song identification is unconfirmed or generic (e.g. "Live Performance", "Unidentified Clip", confidence < 0.50), the system offers user-assisted band assignment:
+1. **Interactive Web Modal ("Which band is this?")**:
+   - Presents a 16:9 extracted video still thumbnail from `/api/video/{id}/thumbnail`.
+   - Displays matched concert metadata (headliner, tour, venue, date).
+   - Generates numbered buttons for all bands who played that specific event (`concert.lineup_artists` aggregated from Setlist.fm).
+   - Provides a custom input box to record unlisted openers or guest performers.
+   - Updates target YouTube metadata and identification state via `POST /api/video/{id}/set-band`.
+2. **Review Queue & Inspector Drawer Quick Chips**:
+   - Review Queue cards render a dedicated amber lineup panel with 1-click band chips and a modal link.
+   - Slide-over Inspector Drawer displays `#drawer-band-assist-section` with 1-click performer selection chips.
+   - Kanban board cards feature a quick `Band?` action badge.
+
+### 7.4 CLI Review Lineup Action (`[B] Which band is this?`)
+Within `stagesync review`:
+- Interactive prompt offers `[B] Which band is this?`.
+- Displays a table of all artists on the show lineup (headliner and support acts) plus `[C]` for manual custom opener entry.
+- Invokes `coordinator.reidentify_video_with_band`, regenerates YouTube draft metadata, and marks the item reviewed.
+
 ---
 
 ## 8. Swarm Multi-Agent Execution Roadmap

@@ -128,7 +128,7 @@ class SetlistFmClient:
                 best = s
                 break
 
-        return self.parse_setlist_payload(best, event_date)
+        return self.parse_setlist_payload(best, event_date, all_setlists=setlists)
 
     def search_by_city_and_date(
         self,
@@ -166,15 +166,15 @@ class SetlistFmClient:
                 for s in setlists:
                     v_name = s.get("venue", {}).get("name", "").lower()
                     if hint_lower in v_name or v_name in hint_lower:
-                        return self.parse_setlist_payload(s, event_date)
+                        return self.parse_setlist_payload(s, event_date, all_setlists=setlists)
 
             # If artist_name was specified and matched
             if artist_name:
-                return self.parse_setlist_payload(setlists[0], event_date)
+                return self.parse_setlist_payload(setlists[0], event_date, all_setlists=setlists)
 
             # If only 1 setlist exists for the whole city on that date and no venue hint
             if len(setlists) == 1 and not venue_name_hint:
-                return self.parse_setlist_payload(setlists[0], event_date)
+                return self.parse_setlist_payload(setlists[0], event_date, all_setlists=setlists)
 
         return None
 
@@ -288,12 +288,13 @@ class SetlistFmClient:
                 best = s
                 break
 
-        return self.parse_setlist_payload(best, fallback_date)
+        return self.parse_setlist_payload(best, fallback_date, all_setlists=setlists)
 
     def parse_setlist_payload(
         self,
         item: Dict[str, Any],
         fallback_date: str,
+        all_setlists: Optional[List[Dict[str, Any]]] = None,
     ) -> MatchedConcert:
         """Parse raw Setlist.fm JSON object into MatchedConcert."""
         event_id = item.get("id", "")
@@ -356,10 +357,22 @@ class SetlistFmClient:
 
         source_url = item.get("url")
 
+        # Extract all lineup artists from all setlists on this bill
+        lineup_artists: List[str] = []
+        if all_setlists:
+            for s in all_setlists:
+                a_name = s.get("artist", {}).get("name")
+                if a_name and a_name not in lineup_artists:
+                    lineup_artists.append(a_name)
+        if not lineup_artists and headliner:
+            lineup_artists = [headliner]
+        elif headliner and headliner not in lineup_artists:
+            lineup_artists.insert(0, headliner)
+
         return MatchedConcert(
             setlist_fm_event_id=event_id,
             headliner_artist=headliner,
-            lineup_artists=[headliner],
+            lineup_artists=lineup_artists,
             tour_name=tour_name,
             event_date=standard_date,
             venue_name=venue_name,

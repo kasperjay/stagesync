@@ -1122,6 +1122,91 @@ class PipelineCoordinator:
 
         return video, matched_concert, ident
 
+    def reidentify_video_with_band(
+        self,
+        video_id: str,
+        artist_name: str,
+        song_title: Optional[str] = None,
+    ) -> Tuple[Video, Optional[Concert], Optional[Identification]]:
+        """Assign specific performing band to video from show lineup."""
+        artist_clean = artist_name.strip()
+        if not artist_clean:
+            raise ValueError("artist_name cannot be empty.")
+
+        video = self.db.get_video(video_id)
+        if not video:
+            raise ValueError(f"Video {video_id} not found.")
+
+        ident = self.db.get_identification_by_video_id(video.id)
+        concert: Optional[Concert] = None
+        if ident and ident.concert_id:
+            concert = self.db.get_concert(ident.concert_id)
+
+        # If artist not in concert lineup, register it
+        if concert:
+            if artist_clean not in concert.lineup_artists:
+                concert.lineup_artists.append(artist_clean)
+                concert = self.db.save_concert(concert)
+
+        # Update or create identification
+        if not ident:
+            ident = Identification(
+                video_id=video.id,
+                concert_id=concert.id if concert else None,
+                detected_song_title=song_title.strip() if song_title else "Live Performance",
+                detected_artist=artist_clean,
+                match_confidence=0.90 if song_title else 0.75,
+                fingerprint_service="user_assisted_band",
+                setlist_verified=bool(concert),
+            )
+        else:
+            ident.detected_artist = artist_clean
+            if song_title and song_title.strip():
+                ident.detected_song_title = song_title.strip()
+                ident.match_confidence = max(ident.match_confidence, 0.90)
+            if concert:
+                ident.concert_id = concert.id
+                ident.setlist_verified = True
+            ident.status = "USER_ASSISTED_BAND"
+
+        self.db.save_identification(ident)
+
+        # Pre-generate updated YouTube draft metadata
+        venue = None
+        if concert and concert.venue_id:
+            venue = self.db.get_venue(concert.venue_id)
+        elif video.latitude and video.longitude:
+            venue = self.db.find_venue_by_coords(video.latitude, video.longitude)
+
+        yt_meta = self.metadata_gen.generate_metadata(
+            video=video,
+            identification=ident,
+            concert=concert,
+            venue=venue,
+        )
+        upload_job = self.db.get_youtube_upload_by_video_id(video.id)
+        if not upload_job:
+            upload_job = YouTubeUpload(
+                video_id=video.id,
+                title=yt_meta.title,
+                description=yt_meta.description,
+                tags=yt_meta.tags,
+                category_id=yt_meta.category_id,
+                privacy_status=PrivacyStatus(self.settings.default_privacy),
+                upload_status="DRAFT",
+                total_bytes=video.file_size_bytes or 0,
+            )
+        else:
+            upload_job.title = yt_meta.title
+            upload_job.description = yt_meta.description
+            upload_job.tags = yt_meta.tags
+        self.db.save_youtube_upload(upload_job)
+
+        video.processing_status = VideoStatus.PENDING_REVIEW
+        self.db.save_video(video)
+
+        return video, concert, ident
+
     # -------------------------------------------------------------------------
     # Publication & Upload Dispatcher
     # -------------------------------------------------------------------------

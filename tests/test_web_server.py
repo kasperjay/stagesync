@@ -255,6 +255,52 @@ class TestWebServer(AioHTTPTestCase):
         self.assertFalse(data["success"])
         self.assertIn("Missing venue_name", data["error"])
 
+    async def test_set_video_band_endpoint(self):
+        """Verify /api/video/{id}/set-band assigns band to video from show lineup."""
+        fake_video = Video(
+            id="v_100",
+            source_photo_id="sp_100",
+            filename="IMG_6142.MOV",
+            duration_seconds=30.0,
+            processing_status=VideoStatus.PENDING_REVIEW,
+        )
+        fake_concert = MagicMock()
+        fake_concert.model_dump.return_value = {
+            "id": "c_1",
+            "headliner_artist": "Attila",
+            "lineup_artists": ["Attila", "Gideon", "ten56.", "Until I Wake"],
+        }
+        fake_ident = MagicMock()
+        fake_ident.model_dump.return_value = {
+            "id": "id_1",
+            "detected_artist": "Gideon",
+            "detected_song_title": "Live Performance",
+            "status": "USER_ASSISTED_BAND",
+        }
+
+        self.mock_coord.reidentify_video_with_band.return_value = (fake_video, fake_concert, fake_ident)
+
+        payload = {"artist_name": "Gideon"}
+        resp = await self.client.post("/api/video/v_100/set-band", json=payload)
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["video"]["id"], "v_100")
+        self.assertEqual(data["identification"]["detected_artist"], "Gideon")
+        self.mock_coord.reidentify_video_with_band.assert_called_once_with(
+            video_id="v_100",
+            artist_name="Gideon",
+            song_title=None,
+        )
+
+    async def test_set_video_band_validation_error(self):
+        """Verify /api/video/{id}/set-band requires artist_name."""
+        resp = await self.client.post("/api/video/v_100/set-band", json={})
+        self.assertEqual(resp.status, 400)
+        data = await resp.json()
+        self.assertFalse(data["success"])
+        self.assertIn("Missing artist_name", data["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
