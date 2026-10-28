@@ -46,6 +46,8 @@ from stagesync.intelligence.spatial_correlator import (
     PhotoLocationSample,
     SpatialTemporalCorrelator,
 )
+from stagesync.intelligence.thumbnail_extractor import ThumbnailExtractor
+from stagesync.intelligence.venue_search import VenueSearchEngine
 from stagesync.publisher.metadata_gen import MetadataGenerator
 from stagesync.publisher.resumable_upload import ResumableUploader, UploadResult
 from stagesync.security import sanitize_filename, validate_safe_path
@@ -76,6 +78,12 @@ class PipelineCoordinator:
         self.shazam_matcher = ShazamMatcher()
         self.ai_audio_judge = AIAudioJudge()
         self.spatial_correlator = SpatialTemporalCorrelator()
+        self.thumbnail_extractor = ThumbnailExtractor()
+        self.venue_search_engine = VenueSearchEngine(
+            db=self.db,
+            setlist_client=self.setlist_client,
+            geocoder=self.geocoder,
+        )
 
         # Publisher components
         self.metadata_gen = MetadataGenerator()
@@ -954,6 +962,165 @@ class PipelineCoordinator:
         video.processing_status = VideoStatus.REJECTED
         self.db.save_video(video)
         return video
+
+    def reidentify_video_with_venue(
+        self,
+        video_id: str,
+        venue_name: str,
+        city: Optional[str] = None,
+        state_province: Optional[str] = None,
+        country_code: str = "US",
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
+        setlist_fm_venue_id: Optional[str] = None,
+        osm_id: Optional[str] = None,
+        formatted_address: Optional[str] = None,
+    ) -> Tuple[Video, Optional[Concert], Optional[Identification]]:
+        """Link a venue to a video and re-run concert matching and setlist identification."""
+        video = self.db.get_video(video_id)
+        if not video:
+            raise ValueError(f"Video {video_id} not found.")
+
+        # 1. Resolve or create venue
+        venue: Optional[Venue] = None
+        if setlist_fm_venue_id:
+            venue = self.db.get_venue_by_setlist_id(setlist_fm_venue_id)
+        if not venue and latitude is not None and longitude is not None:
+            venue = self.db.find_venue_by_coords(latitude, longitude, tolerance=0.005)
+        if not venue:
+            v_matches = self.db.search_venues(query=venue_name, city=city, limit=1)
+            if v_matches:
+                venue = v_matches[0]
+
+        if not venue:
+            venue = Venue(
+                name=venue_name.strip(),
+                city=city.strip() if city else "Unknown City",
+                state_province=state_province,
+                country_code=country_code,
+                latitude=latitude,
+                longitude=longitude,
+                setlist_fm_venue_id=setlist_fm_venue_id,
+                osm_id=osm_id,
+                formatted_address=formatted_address or f"{venue_name}, {city or ''}",
+            )
+        else:
+            if setlist_fm_venue_id and not venue.setlist_fm_venue_id:
+                venue.setlist_fm_venue_id = setlist_fm_venue_id
+            if osm_id and not venue.osm_id:
+                venue.osm_id = osm_id
+            if latitude is not None and venue.latitude is None:
+                venue.latitude = latitude
+                venue.longitude = longitude
+
+        venue = self.db.save_venue(venue)
+
+        # 2. Update video coordinates if video lacked them
+        if video.latitude is None and venue.latitude is not None:
+            video.latitude = venue.latitude
+            video.longitude = venue.longitude
+
+        # 3. Search Setlist.fm for concert on this video's date at this venue
+        event_date_str = (
+            video.recorded_at_local[:10]
+            if video.recorded_at_local
+            else (video.recorded_at_utc[:10] if video.recorded_at_utc else None)
+        )
+
+        matched_concert: Optional[Concert] = None
+        res: Optional[MatchedConcert] = None
+        if event_date_str:
+            res = self.setlist_client.search_by_venue_and_date(
+                event_date=event_date_str,
+                venue_name=venue.name,
+                city_name=venue.city,
+            )
+            # Try adjacent UTC date if recorded near midnight
+            if not res and video.recorded_at_utc and video.recorded_at_utc[:10] != event_date_str:
+                res = self.setlist_client.search_by_venue_and_date(
+                    event_date=video.recorded_at_utc[:10],
+                    venue_name=venue.name,
+                    city_name=venue.city,
+                )
+            # Fallback search by city with venue name hint
+            if not res and venue.city:
+                res = self.setlist_client.search_by_city_and_date(
+                    event_date=event_date_str,
+                    city_name=venue.city,
+                    venue_name_hint=venue.name,
+                )
+
+        if res:
+            if res.venue_name and res.venue_name != "Unknown Venue":
+                venue.name = res.venue_name
+                if res.venue_id:
+                    venue.setlist_fm_venue_id = res.venue_id
+                venue = self.db.save_venue(venue)
+
+            concert = Concert(
+                venue_id=venue.id,
+                headliner_artist=res.headliner_artist,
+                lineup_artists=res.lineup_artists,
+                tour_name=res.tour_name,
+                event_date=res.event_date,
+                setlist_fm_event_id=res.setlist_fm_event_id,
+                setlist_data=res.raw_setlist_data,
+                source_url=res.source_url,
+            )
+            matched_concert = self.db.save_concert(concert)
+
+        # 4. Update or create identification
+        ident = self.db.get_identification_by_video_id(video.id)
+        if not ident:
+            ident = Identification(
+                video_id=video.id,
+                concert_id=matched_concert.id if matched_concert else None,
+                detected_song_title="Live Performance",
+                detected_artist=matched_concert.headliner_artist if matched_concert else "Live Artist",
+                match_confidence=0.85 if matched_concert else 0.40,
+                fingerprint_service="venue_user_assisted",
+                setlist_verified=bool(matched_concert),
+            )
+        else:
+            if matched_concert:
+                ident.concert_id = matched_concert.id
+                if not ident.detected_artist or ident.detected_artist in ("Live Artist", "Unknown Artist", "Unknown"):
+                    ident.detected_artist = matched_concert.headliner_artist
+                ident.setlist_verified = True
+                ident.match_confidence = max(ident.match_confidence, 0.85)
+            ident.status = "USER_ASSISTED"
+        self.db.save_identification(ident)
+
+        # 5. Advance status & YouTube draft metadata
+        video.is_concert_candidate = True
+        video.processing_status = VideoStatus.PENDING_REVIEW
+        self.db.save_video(video)
+
+        yt_meta = self.metadata_gen.generate_metadata(
+            video=video,
+            identification=ident,
+            concert=matched_concert,
+            venue=venue,
+        )
+        upload_job = self.db.get_youtube_upload_by_video_id(video.id)
+        if not upload_job:
+            upload_job = YouTubeUpload(
+                video_id=video.id,
+                title=yt_meta.title,
+                description=yt_meta.description,
+                tags=yt_meta.tags,
+                category_id=yt_meta.category_id,
+                privacy_status=PrivacyStatus(self.settings.default_privacy),
+                upload_status="DRAFT",
+                total_bytes=video.file_size_bytes or 0,
+            )
+        else:
+            upload_job.title = yt_meta.title
+            upload_job.description = yt_meta.description
+            upload_job.tags = yt_meta.tags
+        self.db.save_youtube_upload(upload_job)
+
+        return video, matched_concert, ident
 
     # -------------------------------------------------------------------------
     # Publication & Upload Dispatcher

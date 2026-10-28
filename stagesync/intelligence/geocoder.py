@@ -179,3 +179,72 @@ class ReverseGeocoder:
         self.db.set_cached_geocode(cache_key, cache_data, ttl_days=30)
 
         return resolved
+
+    def search_venues(
+        self,
+        query: str,
+        city: Optional[str] = None,
+        limit: int = 8,
+    ) -> List[Dict[str, Any]]:
+        """Search OpenStreetMap / Nominatim for venues matching query and optional city."""
+        if not query.strip():
+            return []
+
+        self._enforce_rate_limit()
+        full_query = f"{query.strip()}, {city.strip()}" if city and city.strip() else query.strip()
+        params = {
+            "format": "jsonv2",
+            "q": full_query,
+            "addressdetails": "1",
+            "limit": str(limit),
+        }
+        headers = {"User-Agent": USER_AGENT}
+
+        try:
+            res = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params=params,
+                headers=headers,
+                timeout=self.timeout,
+            )
+            res.raise_for_status()
+            items = res.json()
+            results = []
+            for item in items:
+                address = item.get("address", {})
+                v_name = item.get("name")
+                if not v_name:
+                    poi_keys = [
+                        "amenity", "leisure", "theatre", "stadium", "historic",
+                        "building", "tourism", "arts_centre", "club"
+                    ]
+                    for k in poi_keys:
+                        if k in address:
+                            v_name = address[k]
+                            break
+                if not v_name:
+                    v_name = item.get("display_name", "").split(",")[0].strip()
+
+                c_name = (
+                    address.get("city")
+                    or address.get("town")
+                    or address.get("village")
+                    or address.get("municipality")
+                    or address.get("county")
+                    or "Unknown City"
+                )
+                results.append({
+                    "name": v_name,
+                    "city": c_name,
+                    "state": address.get("state") or address.get("region"),
+                    "country": address.get("country_code", "US").upper(),
+                    "formatted_address": item.get("display_name"),
+                    "latitude": float(item["lat"]) if "lat" in item else None,
+                    "longitude": float(item["lon"]) if "lon" in item else None,
+                    "osm_id": str(item.get("osm_id", "")),
+                })
+            return results
+        except Exception as e:
+            logger.warning("Nominatim forward search failed for %s: %s", full_query, e)
+            return []
+

@@ -219,6 +219,53 @@ class SetlistFmClient:
             logger.warning("Setlist.fm request failed: %s", e)
             return None
 
+    def search_venues(
+        self,
+        name: str,
+        city_name: Optional[str] = None,
+        max_results: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Search Setlist.fm for venues matching name and optional city."""
+        if not self.api_key or not name.strip():
+            return []
+
+        self._enforce_rate_limit()
+        headers = {
+            "x-api-key": self.api_key,
+            "Accept": "application/json",
+            "User-Agent": "StageSync/1.0",
+        }
+        url = f"{SETLIST_FM_API_BASE}/search/venues"
+        params: Dict[str, str] = {"name": name.strip()}
+        if city_name and city_name.strip():
+            params["cityName"] = city_name.strip()
+
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=self.timeout)
+            if res.status_code == 404:
+                return []
+            res.raise_for_status()
+            data = res.json()
+            venues = data.get("venue", [])
+            results = []
+            for v in venues[:max_results]:
+                city_obj = v.get("city", {})
+                coords = city_obj.get("coords", {})
+                results.append({
+                    "id": v.get("id"),
+                    "name": v.get("name"),
+                    "city": city_obj.get("name", "Unknown City"),
+                    "state": city_obj.get("stateCode") or city_obj.get("state"),
+                    "country": city_obj.get("country", {}).get("code", "US"),
+                    "latitude": float(coords["lat"]) if coords.get("lat") is not None else None,
+                    "longitude": float(coords["long"]) if coords.get("long") is not None else None,
+                    "url": v.get("url"),
+                })
+            return results
+        except Exception as e:
+            logger.warning("Setlist.fm venue search failed: %s", e)
+            return []
+
     def _query_setlists(
         self,
         params: Dict[str, str],

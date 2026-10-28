@@ -20,6 +20,7 @@ from aiohttp import web
 from stagesync.config import Settings, get_settings
 from stagesync.database.connection import Database, get_db
 from stagesync.database.models import PrivacyStatus, VideoStatus
+from stagesync.intelligence.thumbnail_extractor import ThumbnailExtractor
 from stagesync.pipeline import PipelineCoordinator
 
 logger = logging.getLogger(__name__)
@@ -577,6 +578,15 @@ HTML_PAGE = """<!DOCTYPE html>
       <!-- Drawer Body -->
       <div class="flex-1 overflow-y-auto p-6 space-y-6 text-xs">
 
+        <!-- Video Still Frame -->
+        <div class="relative rounded-2xl overflow-hidden border border-border bg-card-subtle group">
+          <img id="drawer-thumbnail" src="" alt="Video Frame" class="w-full h-44 object-cover" />
+          <button type="button" onclick="openVenueAssistModal(activeSelectedVideo ? activeSelectedVideo.id : '')" class="absolute inset-0 bg-black/50 backdrop-blur-xs opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 text-white font-semibold text-xs transition duration-200">
+            <svg class="w-4 h-4 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+            <span>What venue is this? / Assist Search</span>
+          </button>
+        </div>
+
         <!-- AI Match Hero Card -->
         <div class="bg-gradient-to-br from-indigo-950/40 via-card-subtle to-canvas border border-indigo-900/40 rounded-2xl p-4 space-y-3">
           <div class="flex items-center justify-between">
@@ -612,10 +622,16 @@ HTML_PAGE = """<!DOCTYPE html>
           </div>
 
           <div class="grid grid-cols-2 gap-3">
-            <div class="bg-canvas p-2.5 rounded-xl border border-border">
-              <span class="text-zinc-400 block text-[10px]">Venue</span>
-              <span id="drawer-venue-name" class="font-semibold text-zinc-200 mt-0.5 block truncate">Red Rocks Amphitheatre</span>
-              <span id="drawer-venue-city" class="text-zinc-400 block text-[10px] truncate">Morrison, CO</span>
+            <div class="bg-canvas p-2.5 rounded-xl border border-border flex flex-col justify-between">
+              <div>
+                <span class="text-zinc-400 block text-[10px]">Venue</span>
+                <span id="drawer-venue-name" class="font-semibold text-zinc-200 mt-0.5 block truncate">Red Rocks Amphitheatre</span>
+                <span id="drawer-venue-city" class="text-zinc-400 block text-[10px] truncate">Morrison, CO</span>
+              </div>
+              <button type="button" onclick="openVenueAssistModal(activeSelectedVideo ? activeSelectedVideo.id : '')" class="mt-2 text-[10px] font-semibold text-brand-400 hover:text-brand-300 flex items-center gap-1">
+                <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                Change / Search Venue →
+              </button>
             </div>
             <div class="bg-canvas p-2.5 rounded-xl border border-border">
               <span class="text-zinc-400 block text-[10px]">Event Date</span>
@@ -791,6 +807,79 @@ HTML_PAGE = """<!DOCTYPE html>
       <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-border">
         <button onclick="closeScanModal()" class="px-4 py-2 text-xs rounded-xl bg-card hover:bg-zinc-800 text-zinc-300 transition">Cancel</button>
         <button onclick="executeScan()" id="btn-run-scan" class="px-5 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition">Start Discovery</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================================================================= -->
+  <!-- USER-ASSIST VENUE IDENTIFICATION MODAL                            -->
+  <!-- ================================================================= -->
+  <div id="venue-assist-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-card border border-border rounded-2xl max-w-lg w-full p-6 shadow-2xl relative space-y-4 animate-in fade-in zoom-in-95 duration-150">
+      
+      <!-- Modal Header -->
+      <div class="flex items-start justify-between border-b border-border pb-3">
+        <div>
+          <div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-brand-500/10 text-brand-400 border border-brand-500/20 mb-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse"></span>
+            IDENTIFICATION ASSISTANT
+          </div>
+          <h3 class="text-lg font-bold text-white tracking-tight">What venue is this?</h3>
+          <p id="venue-assist-subtitle" class="text-xs text-zinc-400 mt-0.5">Help StageSync identify the concert venue and correlate the setlist.</p>
+        </div>
+        <button onclick="closeVenueAssistModal()" class="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-zinc-800 transition">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+
+      <!-- Video Still Preview -->
+      <div class="relative rounded-xl overflow-hidden border border-border bg-black/50 aspect-video flex items-center justify-center">
+        <img id="venue-assist-thumbnail" src="" alt="Video Frame Preview" class="w-full h-full object-cover" />
+        <div class="absolute bottom-2 left-2 right-2 flex items-center justify-between pointer-events-none">
+          <span id="venue-assist-filename-tag" class="px-2 py-1 rounded bg-black/80 backdrop-blur text-[10px] font-mono text-zinc-200 border border-white/10 truncate max-w-[200px]">video.mov</span>
+          <span id="venue-assist-meta-tag" class="px-2 py-1 rounded bg-black/80 backdrop-blur text-[10px] font-mono text-zinc-300 border border-white/10">00:00</span>
+        </div>
+      </div>
+
+      <!-- Live Venue Search Box -->
+      <div class="space-y-1.5">
+        <label for="venue-search-input" class="text-xs font-semibold text-zinc-300 flex items-center justify-between">
+          <span>Search Venue Name</span>
+          <span class="text-[10px] text-zinc-400 font-normal">Searches Local DB, Setlist.fm & OpenStreetMap</span>
+        </label>
+        <div class="relative">
+          <input
+            type="text"
+            id="venue-search-input"
+            placeholder="Type venue name (e.g. Come and Take It Live, Red Rocks)..."
+            class="w-full bg-canvas border border-border rounded-xl px-3.5 py-2.5 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:border-brand-500 transition pl-9"
+            oninput="handleVenueSearchInput(this.value)"
+          />
+          <svg class="w-4 h-4 text-zinc-400 absolute left-3 top-3 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+        </div>
+      </div>
+
+      <!-- Candidate Venues List -->
+      <div id="venue-search-results" class="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+        <div class="text-center py-5 text-zinc-400 text-xs">Type a venue name above to find matches...</div>
+      </div>
+
+      <!-- Selected Venue Confirmation Card -->
+      <div id="venue-selected-preview" class="hidden p-3 rounded-xl bg-brand-500/10 border border-brand-500/30 text-xs space-y-1">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-brand-400">Selected Venue Candidate</div>
+        <div id="venue-selected-name" class="font-bold text-white text-sm">Venue Name</div>
+        <div id="venue-selected-address" class="text-zinc-300 text-[11px]">Location Details</div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="flex items-center justify-between pt-2 border-t border-border">
+        <button type="button" onclick="closeVenueAssistModal()" class="px-4 py-2 text-xs font-semibold rounded-xl bg-card border border-border text-zinc-300 hover:bg-zinc-800 transition">Cancel</button>
+        <button type="button" id="btn-confirm-set-venue" onclick="confirmSetVenue()" disabled class="px-5 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 text-white shadow-md shadow-brand-500/20 disabled:opacity-50 disabled:pointer-events-none hover:from-brand-500 hover:to-indigo-500 transition flex items-center gap-2">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+          Confirm & Re-Search Concert
+        </button>
       </div>
     </div>
   </div>
@@ -1011,6 +1100,7 @@ HTML_PAGE = """<!DOCTYPE html>
         const venue = v.venue ? `${v.venue.name}, ${v.venue.city}` : 'No venue detected';
         const conf = ident.match_confidence ? Math.round(ident.match_confidence * 100) : 0;
         const durStr = formatDuration(v.duration_seconds);
+        const hasKnownVenue = v.venue && v.venue.name && !v.venue.name.startsWith('Venue near');
 
         let confBadge = `<span class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-400">Score: ${conf}%</span>`;
         if (conf >= 80) {
@@ -1020,11 +1110,20 @@ HTML_PAGE = """<!DOCTYPE html>
         }
 
         return `
-          <div class="bg-card border border-border rounded-xl p-3.5 hover:border-brand-500/50 hover:shadow-lg hover:shadow-brand-500/5 transition space-y-2.5 group">
-            <button type="button" onclick="openDrawer('${v.id}')" class="w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded-lg space-y-2.5 block">
+          <div class="bg-card border border-border rounded-xl p-3 hover:border-brand-500/50 hover:shadow-lg hover:shadow-brand-500/5 transition space-y-2.5 group">
+            <!-- Thumbnail Frame -->
+            <div class="relative w-full h-24 rounded-lg overflow-hidden border border-border/60 bg-black/40 cursor-pointer group/thumb" onclick="openVenueAssistModal('${v.id}')" title="Click to assist venue identification">
+              <img src="/api/video/${v.id}/thumbnail" alt="" class="w-full h-full object-cover">
+              <div class="absolute inset-0 bg-black/50 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center text-[10px] text-white font-semibold transition gap-1">
+                <svg class="w-3.5 h-3.5 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                <span>Assist Venue</span>
+              </div>
+            </div>
+
+            <button type="button" onclick="openDrawer('${v.id}')" class="w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded-lg space-y-2 block">
               <div class="flex items-center justify-between text-[11px]">
                 <span class="font-mono text-zinc-400 truncate max-w-[130px]">${v.filename}</span>
-                <span class="font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[10px]">${durStr} • ${v.height ? v.height + 'p' : 'HD'}</span>
+                <span class="font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[10px]">${durStr}</span>
               </div>
 
               <div>
@@ -1034,19 +1133,24 @@ HTML_PAGE = """<!DOCTYPE html>
 
               <div class="text-[11px] text-zinc-400 flex items-center gap-1.5 truncate">
                 <svg class="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /></svg>
-                <span class="truncate">${venue}</span>
+                <span class="truncate ${!hasKnownVenue ? 'text-amber-400 italic' : ''}">${venue}</span>
               </div>
             </button>
 
-            <div class="pt-2 border-t border-border/50 flex items-center justify-between">
+            <div class="pt-2 border-t border-border/50 flex items-center justify-between gap-1">
               ${confBadge}
-              ${colKey === 'review' ? `
-                <button type="button" onclick="quickApprove('${v.id}')" class="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-brand-600 hover:bg-brand-500 text-white transition">
-                  Approve ✓
+              <div class="flex items-center gap-1">
+                <button type="button" onclick="event.stopPropagation(); openVenueAssistModal('${v.id}')" title="Assist venue identification" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/20 transition">
+                  Venue
                 </button>
-              ` : `
-                <button type="button" onclick="openDrawer('${v.id}')" class="text-[10px] text-zinc-400 hover:text-white transition">Inspect →</button>
-              `}
+                ${colKey === 'review' ? `
+                  <button type="button" onclick="quickApprove('${v.id}')" class="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-brand-600 hover:bg-brand-500 text-white transition">
+                    Approve ✓
+                  </button>
+                ` : `
+                  <button type="button" onclick="openDrawer('${v.id}')" class="text-[10px] text-zinc-400 hover:text-white transition px-1">Inspect →</button>
+                `}
+              </div>
             </div>
           </div>
         `;
@@ -1085,45 +1189,73 @@ HTML_PAGE = """<!DOCTYPE html>
 
         return `
           <div class="bg-card border border-border rounded-2xl p-5 hover:border-zinc-700 transition space-y-4 shadow-sm">
-            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3.5">
-              <button type="button" class="text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded-lg p-1 -m-1" onclick="openDrawer('${v.id}')">
-                <span class="text-xs font-mono text-zinc-400">${v.filename}</span>
-                <h3 class="text-base font-bold text-zinc-100 flex items-center gap-2 mt-0.5">
-                  <span class="hover:text-brand-300 transition">${artist}</span>
-                  <span class="text-zinc-400 font-normal">—</span>
-                  <span class="text-brand-400 font-semibold">${song}</span>
-                </h3>
-              </button>
-              <div class="flex items-center gap-2">
-                <span class="text-xs px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-semibold">
-                  ${conf}% Match
-                </span>
-                <span class="text-xs px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 font-semibold">
-                  Pending Review
-                </span>
+            <div class="flex flex-col md:flex-row gap-4">
+              
+              <!-- Video Still Preview -->
+              <div class="w-full md:w-44 h-28 rounded-xl overflow-hidden border border-border bg-black/40 flex-shrink-0 relative group cursor-pointer" onclick="openVenueAssistModal('${v.id}')">
+                <img src="/api/video/${v.id}/thumbnail" alt="" class="w-full h-full object-cover">
+                <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-1 text-[11px] text-white font-semibold transition p-2 text-center">
+                  <svg class="w-4 h-4 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                  <span>What venue is this?</span>
+                </div>
+              </div>
+
+              <!-- Video & Match Details -->
+              <div class="flex-1 space-y-3">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-2.5">
+                  <button type="button" class="text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded-lg p-0.5" onclick="openDrawer('${v.id}')">
+                    <span class="text-xs font-mono text-zinc-400">${v.filename}</span>
+                    <h3 class="text-base font-bold text-zinc-100 flex items-center gap-2 mt-0.5">
+                      <span class="hover:text-brand-300 transition">${artist}</span>
+                      <span class="text-zinc-400 font-normal">—</span>
+                      <span class="text-brand-400 font-semibold">${song}</span>
+                    </h3>
+                  </button>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-semibold">
+                      ${conf}% Match
+                    </span>
+                    <span class="text-xs px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 font-semibold">
+                      Pending Review
+                    </span>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                  <div class="bg-canvas p-2.5 rounded-xl border border-border flex items-center justify-between">
+                    <div class="truncate mr-2">
+                      <span class="text-zinc-400 block text-[10px] uppercase font-semibold">Venue & Location</span>
+                      <span class="font-medium text-zinc-200 mt-0.5 block truncate">${venue}</span>
+                    </div>
+                    <button type="button" onclick="event.stopPropagation(); openVenueAssistModal('${v.id}')" title="Assist venue identification" class="px-2 py-1 rounded-lg bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/30 text-[10px] font-semibold flex items-center gap-1 flex-shrink-0">
+                      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                      Edit
+                    </button>
+                  </div>
+                  <div class="bg-canvas p-2.5 rounded-xl border border-border">
+                    <span class="text-zinc-400 block text-[10px] uppercase font-semibold">Show Date & Tour</span>
+                    <span class="font-medium text-zinc-200 mt-0.5 block truncate">${date} ${c.tour_name ? '(' + c.tour_name + ')' : ''}</span>
+                  </div>
+                  <div class="bg-canvas p-2.5 rounded-xl border border-border font-mono">
+                    <span class="text-zinc-400 block text-[10px] font-sans uppercase font-semibold">Video Specs</span>
+                    <span class="font-medium text-zinc-200 mt-0.5 block">${formatDuration(v.duration_seconds)} • ${v.width && v.height ? `${v.width}x${v.height}` : 'HD'}</span>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-              <div class="bg-canvas p-3 rounded-xl border border-border">
-                <span class="text-zinc-400 block text-[10px] uppercase font-semibold">Venue & Location</span>
-                <span class="font-medium text-zinc-200 mt-0.5 block truncate">${venue}</span>
+            <!-- Footer Action Bar -->
+            <div class="flex items-center justify-between pt-2 border-t border-border/50">
+              <div class="flex items-center gap-3">
+                <button onclick="openDrawer('${v.id}')" class="text-xs text-zinc-400 hover:text-brand-300 flex items-center gap-1">
+                  <span>View Full Metadata & Setlist</span>
+                  <span>→</span>
+                </button>
+                <button onclick="openVenueAssistModal('${v.id}')" class="text-xs text-brand-400 hover:text-brand-300 font-semibold flex items-center gap-1">
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                  <span>What venue is this?</span>
+                </button>
               </div>
-              <div class="bg-canvas p-3 rounded-xl border border-border">
-                <span class="text-zinc-400 block text-[10px] uppercase font-semibold">Show Date & Tour</span>
-                <span class="font-medium text-zinc-200 mt-0.5 block truncate">${date} ${c.tour_name ? '(' + c.tour_name + ')' : ''}</span>
-              </div>
-              <div class="bg-canvas p-3 rounded-xl border border-border font-mono">
-                <span class="text-zinc-400 block text-[10px] font-sans uppercase font-semibold">Video Specs</span>
-                <span class="font-medium text-zinc-200 mt-0.5 block">${formatDuration(v.duration_seconds)} • ${v.width && v.height ? `${v.width}x${v.height}` : 'Resolution pending'}</span>
-              </div>
-            </div>
-
-            <div class="flex items-center justify-between pt-2">
-              <button onclick="openDrawer('${v.id}')" class="text-xs text-zinc-400 hover:text-brand-300 flex items-center gap-1">
-                <span>View Full Metadata & Setlist</span>
-                <span>→</span>
-              </button>
               <div class="flex items-center gap-2">
                 <button onclick="rejectVideo('${v.id}')" class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-card-subtle hover:bg-rose-950/40 hover:text-rose-300 hover:border-rose-800 border border-border transition">
                   Reject
@@ -1235,6 +1367,12 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('drawer-resolution').innerText = v.width && v.height ? `${v.width}x${v.height}` : 'Not analyzed';
       document.getElementById('drawer-recorded-time').innerText = v.recorded_at_utc ? v.recorded_at_utc.replace('T', ' ').substring(0, 16) : '—';
 
+      // Thumbnail Frame
+      const drawerThumb = document.getElementById('drawer-thumbnail');
+      if (drawerThumb) {
+        drawerThumb.src = `/api/video/${v.id}/thumbnail?t=${Date.now()}`;
+      }
+
       // Pre-fill YouTube form
       const defaultTitle = `${artist} - ${song} (Live at ${venue.name || 'Concert'}, ${c.event_date ? c.event_date.substring(0, 4) : ''})`;
       document.getElementById('drawer-title-input').value = defaultTitle;
@@ -1318,6 +1456,208 @@ HTML_PAGE = """<!DOCTYPE html>
           btn.innerHTML = orig;
           btn.disabled = false;
         }
+      }
+    }
+
+    // =================================================================
+    // USER-ASSIST VENUE SEARCH MODAL
+    // =================================================================
+    let activeVenueAssistVideoId = null;
+    let venueSearchDebounceTimer = null;
+    let selectedVenueData = null;
+
+    function openVenueAssistModal(id) {
+      if (!id && activeSelectedVideo) id = activeSelectedVideo.id;
+      const v = videosData.find(item => item.id === id);
+      if (!v) return;
+
+      activeVenueAssistVideoId = id;
+      selectedVenueData = null;
+
+      const thumbImg = document.getElementById('venue-assist-thumbnail');
+      if (thumbImg) {
+        thumbImg.src = `/api/video/${id}/thumbnail?t=${Date.now()}`;
+      }
+
+      document.getElementById('venue-assist-filename-tag').innerText = v.filename || 'video.mov';
+      const dur = formatDuration(v.duration_seconds);
+      const dateStr = v.recorded_at_local ? v.recorded_at_local.substring(0, 10) : (v.recorded_at_utc ? v.recorded_at_utc.substring(0, 10) : '');
+      document.getElementById('venue-assist-meta-tag').innerText = `${dur} • ${dateStr}`;
+
+      const currentVenue = v.venue ? v.venue.name : '';
+      const currentCity = v.venue ? v.venue.city : '';
+      document.getElementById('venue-assist-subtitle').innerText = `Identify venue for ${v.filename} recorded on ${dateStr || 'unknown date'}`;
+
+      const searchInput = document.getElementById('venue-search-input');
+      const initialQuery = currentVenue && !currentVenue.startsWith('Venue near') ? currentVenue : (currentCity || '');
+      searchInput.value = initialQuery;
+
+      document.getElementById('venue-selected-preview').classList.add('hidden');
+      document.getElementById('btn-confirm-set-venue').disabled = true;
+
+      document.getElementById('venue-assist-modal').classList.remove('hidden');
+      searchInput.focus();
+
+      if (searchInput.value) {
+        executeVenueSearch(searchInput.value, currentCity);
+      } else {
+        document.getElementById('venue-search-results').innerHTML = `
+          <div class="text-center py-6 text-zinc-400 text-xs">Type a venue name above to search across local DB, Setlist.fm & OSM...</div>
+        `;
+      }
+    }
+
+    function closeVenueAssistModal() {
+      document.getElementById('venue-assist-modal').classList.add('hidden');
+      activeVenueAssistVideoId = null;
+      selectedVenueData = null;
+    }
+
+    function handleVenueSearchInput(val) {
+      clearTimeout(venueSearchDebounceTimer);
+      venueSearchDebounceTimer = setTimeout(() => {
+        const v = videosData.find(item => item.id === activeVenueAssistVideoId);
+        const cityHint = v && v.venue ? v.venue.city : '';
+        executeVenueSearch(val, cityHint);
+      }, 300);
+    }
+
+    async function executeVenueSearch(query, city) {
+      const resultsBox = document.getElementById('venue-search-results');
+      if (!query || query.trim().length === 0) {
+        resultsBox.innerHTML = `<div class="text-center py-6 text-zinc-400 text-xs">Type a venue name above to find matches...</div>`;
+        return;
+      }
+
+      resultsBox.innerHTML = `
+        <div class="text-center py-5 text-zinc-400 text-xs flex items-center justify-center gap-2">
+          <svg class="w-4 h-4 text-brand-400 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+          <span>Searching local DB, Setlist.fm & OpenStreetMap...</span>
+        </div>
+      `;
+
+      try {
+        const params = new URLSearchParams({ q: query.trim() });
+        if (city && city.trim()) params.append('city', city.trim());
+        const res = await fetch(`/api/venues/search?${params.toString()}`);
+        const data = await res.json();
+        const venues = data.venues || [];
+
+        if (venues.length === 0) {
+          resultsBox.innerHTML = `
+            <div class="p-4 rounded-xl bg-card-subtle border border-border text-center space-y-2">
+              <p class="text-xs text-zinc-400">No matching venues found for "${query}".</p>
+              <button type="button" onclick="selectCustomVenue('${query.replace(/'/g, "\\'")}')" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-zinc-800 hover:bg-zinc-700 text-brand-300 border border-zinc-700 transition">
+                Use "${query}" as custom venue name
+              </button>
+            </div>
+          `;
+          return;
+        }
+
+        resultsBox.innerHTML = venues.map((ven, idx) => {
+          const sourceBadges = (ven.sources || []).map(s => {
+            if (s === 'local') return `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">DB</span>`;
+            if (s === 'setlist_fm') return `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">Setlist.fm</span>`;
+            return `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-sky-500/10 text-sky-400 border border-sky-500/20">OSM</span>`;
+          }).join(' ');
+
+          const addr = ven.formatted_address || `${ven.city}, ${ven.state || ven.country || 'US'}`;
+
+          return `
+            <div onclick="selectVenueCard(${idx})" class="p-2.5 rounded-xl bg-card-subtle hover:bg-card-hover border border-border hover:border-brand-500/50 cursor-pointer transition flex items-center justify-between gap-3 group">
+              <div class="space-y-0.5 overflow-hidden text-left">
+                <div class="flex items-center gap-2">
+                  <span class="font-bold text-xs text-zinc-100 group-hover:text-brand-300 transition truncate">${ven.name}</span>
+                  ${sourceBadges}
+                </div>
+                <div class="text-[11px] text-zinc-400 truncate">${addr}</div>
+              </div>
+              <button type="button" class="px-2.5 py-1 rounded-lg bg-zinc-800 group-hover:bg-brand-600 text-[11px] font-semibold text-zinc-300 group-hover:text-white transition flex-shrink-0">
+                Select
+              </button>
+            </div>
+          `;
+        }).join('');
+
+        window._lastVenueSearchResults = venues;
+      } catch (err) {
+        resultsBox.innerHTML = `<div class="text-center py-5 text-rose-400 text-xs">Error searching venues: ${err}</div>`;
+      }
+    }
+
+    function selectVenueCard(idx) {
+      const venues = window._lastVenueSearchResults || [];
+      const ven = venues[idx];
+      if (!ven) return;
+
+      selectedVenueData = ven;
+      document.getElementById('venue-selected-name').innerText = ven.name;
+      document.getElementById('venue-selected-address').innerText = ven.formatted_address || `${ven.city}, ${ven.state || ven.country || 'US'}`;
+      document.getElementById('venue-selected-preview').classList.remove('hidden');
+      document.getElementById('btn-confirm-set-venue').disabled = false;
+    }
+
+    function selectCustomVenue(name) {
+      const v = videosData.find(item => item.id === activeVenueAssistVideoId);
+      const city = v && v.venue ? v.venue.city : 'Unknown City';
+      selectedVenueData = {
+        name: name,
+        city: city,
+        country: 'US',
+        formatted_address: `${name}, ${city}`,
+      };
+      document.getElementById('venue-selected-name').innerText = name;
+      document.getElementById('venue-selected-address').innerText = city;
+      document.getElementById('venue-selected-preview').classList.remove('hidden');
+      document.getElementById('btn-confirm-set-venue').disabled = false;
+    }
+
+    async function confirmSetVenue() {
+      if (!activeVenueAssistVideoId || !selectedVenueData) return;
+
+      const btn = document.getElementById('btn-confirm-set-venue');
+      const origText = btn.innerHTML;
+      btn.innerHTML = `<span>⏳ Correlating Concert...</span>`;
+      btn.disabled = true;
+
+      try {
+        const payload = {
+          venue_name: selectedVenueData.name,
+          city: selectedVenueData.city,
+          state_province: selectedVenueData.state,
+          country_code: selectedVenueData.country || 'US',
+          latitude: selectedVenueData.latitude,
+          longitude: selectedVenueData.longitude,
+          setlist_fm_venue_id: selectedVenueData.setlist_fm_venue_id,
+          osm_id: selectedVenueData.osm_id,
+          formatted_address: selectedVenueData.formatted_address,
+        };
+
+        const res = await fetch(`/api/video/${activeVenueAssistVideoId}/set-venue`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          alert('Failed to set venue: ' + (data.error || 'Server error'));
+          return;
+        }
+
+        const vidId = activeVenueAssistVideoId;
+        closeVenueAssistModal();
+        await loadData();
+
+        // If drawer is open, refresh it
+        if (activeSelectedVideo && activeSelectedVideo.id === vidId) {
+          openDrawer(vidId);
+        }
+      } catch (err) {
+        alert('Failed to update venue: ' + err);
+      } finally {
+        btn.innerHTML = origText;
+        btn.disabled = false;
       }
     }
 
@@ -1513,6 +1853,7 @@ HTML_PAGE = """<!DOCTYPE html>
       if (e.key === 'Escape') {
         closeDrawer();
         closeScanModal();
+        closeVenueAssistModal();
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
@@ -1547,8 +1888,11 @@ def create_app(
     app.router.add_get("/api/status", handle_get_status)
     app.router.add_get("/api/videos", handle_list_videos)
     app.router.add_get("/api/video/{id}", handle_get_video)
+    app.router.add_get("/api/video/{id}/thumbnail", handle_video_thumbnail)
+    app.router.add_get("/api/venues/search", handle_venue_search)
     app.router.add_post("/api/video/{id}/approve", handle_approve_video)
     app.router.add_post("/api/video/{id}/reject", handle_reject_video)
+    app.router.add_post("/api/video/{id}/set-venue", handle_set_video_venue)
     app.router.add_post("/api/scan", handle_trigger_scan)
     app.router.add_post("/api/picker/create", handle_picker_create)
     app.router.add_post("/api/picker/poll", handle_picker_poll)
@@ -1720,6 +2064,102 @@ async def handle_reject_video(request: web.Request) -> web.Response:
     except Exception as e:
         logger.exception("Failed to reject video %s: %s", video_id, e)
         return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_thumbnail(request: web.Request) -> web.Response:
+    """Return JPEG video frame still or fallback SVG."""
+    db: Database = request.app[DB_KEY]
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    video_id = request.match_info["id"]
+    video = db.get_video(video_id)
+    if not video:
+        return web.Response(
+            body=ThumbnailExtractor.get_fallback_svg(),
+            content_type="image/svg+xml",
+        )
+
+    cached_path = coordinator.thumbnail_extractor.get_cached_path(video.id)
+    if cached_path.exists() and cached_path.stat().st_size > 0:
+        return web.FileResponse(cached_path)
+
+    if video.file_path and Path(video.file_path).exists():
+        try:
+            thumb = coordinator.thumbnail_extractor.extract_thumbnail(
+                video_path=video.file_path,
+                output_path=cached_path,
+                offset_seconds=1.0,
+            )
+            return web.FileResponse(thumb)
+        except Exception as e:
+            logger.warning("Failed to extract thumbnail for %s: %s", video.id, e)
+
+    return web.Response(
+        body=ThumbnailExtractor.get_fallback_svg(),
+        content_type="image/svg+xml",
+    )
+
+
+async def handle_venue_search(request: web.Request) -> web.Response:
+    """Search venues across local DB, Setlist.fm, and OpenStreetMap."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    query = request.query.get("q", "").strip()
+    city = request.query.get("city", "").strip() or None
+    limit = int(request.query.get("limit", 15))
+
+    if not query:
+        return web.json_response({"venues": [], "count": 0})
+
+    try:
+        results = coordinator.venue_search_engine.search(query=query, city=city, limit=limit)
+        return web.json_response({"venues": results, "count": len(results)})
+    except Exception as e:
+        logger.exception("Venue search error for query '%s': %s", query, e)
+        return web.json_response({"venues": [], "count": 0, "error": str(e)})
+
+
+async def handle_set_video_venue(request: web.Request) -> web.Response:
+    """Associate venue with video and re-run concert matching and setlist identification."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    video_id = request.match_info["id"]
+
+    body = await request.json() if request.can_read_body else {}
+    venue_name = (body.get("venue_name") or "").strip()
+    if not venue_name:
+        return web.json_response({"success": False, "error": "Missing venue_name"}, status=400)
+
+    city = body.get("city")
+    state_province = body.get("state_province") or body.get("state")
+    country_code = body.get("country_code") or body.get("country") or "US"
+    lat_raw = body.get("latitude")
+    lon_raw = body.get("longitude")
+    latitude = float(lat_raw) if lat_raw is not None else None
+    longitude = float(lon_raw) if lon_raw is not None else None
+    setlist_fm_venue_id = body.get("setlist_fm_venue_id")
+    osm_id = body.get("osm_id")
+    formatted_address = body.get("formatted_address")
+
+    try:
+        video, concert, ident = coordinator.reidentify_video_with_venue(
+            video_id=video_id,
+            venue_name=venue_name,
+            city=city,
+            state_province=state_province,
+            country_code=country_code,
+            latitude=latitude,
+            longitude=longitude,
+            setlist_fm_venue_id=setlist_fm_venue_id,
+            osm_id=osm_id,
+            formatted_address=formatted_address,
+        )
+        return web.json_response({
+            "success": True,
+            "video": serialize_model(video),
+            "concert": serialize_model(concert),
+            "identification": serialize_model(ident),
+        })
+    except Exception as e:
+        logger.exception("Failed to set venue for video %s: %s", video_id, e)
+        return web.json_response({"success": False, "error": str(e)}, status=500)
 
 
 async def handle_trigger_scan(request: web.Request) -> web.Response:

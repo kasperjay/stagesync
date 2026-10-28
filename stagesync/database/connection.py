@@ -471,6 +471,43 @@ class Database:
             return None
         return self._row_to_venue(row)
 
+    def search_venues(
+        self,
+        query: str,
+        city: Optional[str] = None,
+        limit: int = 10,
+    ) -> List[Venue]:
+        """Search local venues by name, address, or city."""
+        q_clean = query.strip()
+        q_wild = f"%{q_clean}%"
+        conn = self._get_connection()
+        if city and city.strip():
+            c_wild = f"%{city.strip()}%"
+            sql = """
+            SELECT * FROM venues
+            WHERE (name LIKE :q OR formatted_address LIKE :q)
+              AND city LIKE :c
+            ORDER BY (CASE WHEN lower(name) = lower(:q_exact) THEN 0 ELSE 1 END), name ASC
+            LIMIT :limit
+            """
+            rows = conn.execute(
+                sql,
+                {"q": q_wild, "c": c_wild, "q_exact": q_clean, "limit": limit},
+            ).fetchall()
+        else:
+            sql = """
+            SELECT * FROM venues
+            WHERE name LIKE :q OR city LIKE :q OR formatted_address LIKE :q
+            ORDER BY (CASE WHEN lower(name) = lower(:q_exact) THEN 0 ELSE 1 END), name ASC
+            LIMIT :limit
+            """
+            rows = conn.execute(
+                sql,
+                {"q": q_wild, "q_exact": q_clean, "limit": limit},
+            ).fetchall()
+
+        return [self._row_to_venue(r) for r in rows]
+
     def _row_to_venue(self, row: sqlite3.Row) -> Venue:
         return Venue(
             id=row["id"],

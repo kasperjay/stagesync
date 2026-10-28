@@ -427,12 +427,76 @@ def cmd_review(args: argparse.Namespace) -> None:
         console.print("-" * 80)
 
         # Action Prompt
-        console.print("[bold white][A][/bold white] Approve & Queue Upload   [bold white][E][/bold white] Edit Metadata   [bold white][P][/bold white] Change Privacy   [bold white][R][/bold white] Reject   [bold white][S][/bold white] Skip")
-        choice = Prompt.ask("Selection", choices=["a", "e", "p", "r", "s", "A", "E", "P", "R", "S"], default="a").lower()
+        console.print("[bold white][A][/bold white] Approve & Queue Upload   [bold white][V][/bold white] Set/Search Venue   [bold white][E][/bold white] Edit Metadata   [bold white][P][/bold white] Change Privacy   [bold white][R][/bold white] Reject   [bold white][S][/bold white] Skip")
+        choice = Prompt.ask("Selection", choices=["a", "v", "e", "p", "r", "s", "A", "V", "E", "P", "R", "S"], default="a").lower()
 
         if choice == "a":
             coordinator.approve_video(vid.id)
             console.print("[bold green]✓ Approved for upload.[/bold green]\n")
+        elif choice == "v":
+            cur_venue = venue.name if venue else ""
+            v_query = Prompt.ask("Search venue name (e.g. 'Come and Take It Live')", default=cur_venue if venue else "")
+            city_hint = venue.city if venue else None
+            with console.status(f"[bold cyan]Searching venues for '{v_query}' across DB, Setlist.fm & OSM...[/bold cyan]"):
+                candidates = coordinator.venue_search_engine.search(query=v_query, city=city_hint, limit=10)
+
+            chosen_cand = None
+            if not candidates:
+                console.print(f"[yellow]No online matches found for '{v_query}'. Enter manual details:[/yellow]")
+                man_name = Prompt.ask("Venue Name", default=v_query)
+                man_city = Prompt.ask("City", default=venue.city if venue else "Austin")
+                man_state = Prompt.ask("State / Province (e.g. TX)", default=venue.state_province if venue else "TX")
+                chosen_cand = {
+                    "name": man_name,
+                    "city": man_city,
+                    "state": man_state,
+                    "country": "US",
+                    "formatted_address": f"{man_name}, {man_city}, {man_state}",
+                }
+            else:
+                table = Table(title=f"Venues Matching '{v_query}'", box=box.ROUNDED)
+                table.add_column("#", style="bold cyan", justify="right")
+                table.add_column("Venue Name", style="bold white")
+                table.add_column("Location", style="yellow")
+                table.add_column("Sources", style="dim")
+
+                for c_idx, cand in enumerate(candidates, start=1):
+                    sources_str = ", ".join(cand.get("sources", ["manual"]))
+                    loc_desc = f"{cand.get('city', '')}, {cand.get('state') or cand.get('country', '')}"
+                    table.add_row(str(c_idx), cand.get("name", "Unknown"), loc_desc, sources_str)
+
+                console.print(table)
+                choice_idx = Prompt.ask(
+                    "Select venue number (or 0 to cancel)",
+                    choices=[str(i) for i in range(len(candidates) + 1)],
+                    default="1",
+                )
+                if choice_idx == "0":
+                    console.print("[dim]Cancelled venue update.[/dim]\n")
+                    continue
+                chosen_cand = candidates[int(choice_idx) - 1]
+
+            with console.status("[bold green]Associating venue and re-searching Setlist.fm concert...[/bold green]"):
+                up_vid, up_concert, up_ident = coordinator.reidentify_video_with_venue(
+                    video_id=vid.id,
+                    venue_name=chosen_cand.get("name", ""),
+                    city=chosen_cand.get("city"),
+                    state_province=chosen_cand.get("state"),
+                    country_code=chosen_cand.get("country", "US"),
+                    latitude=chosen_cand.get("latitude"),
+                    longitude=chosen_cand.get("longitude"),
+                    setlist_fm_venue_id=chosen_cand.get("setlist_fm_venue_id"),
+                    osm_id=chosen_cand.get("osm_id"),
+                    formatted_address=chosen_cand.get("formatted_address"),
+                )
+
+            if up_concert:
+                console.print(f"[bold green]✓ Matched Concert:[/bold green] [bold cyan]{up_concert.headliner_artist}[/bold cyan] at [bold yellow]{chosen_cand.get('name')}[/bold yellow] ({up_concert.event_date})")
+                if up_ident and up_ident.detected_song_title:
+                    console.print(f"  Track: [bold]{up_ident.detected_song_title}[/bold] (Confidence: {up_ident.match_confidence * 100:.1f}%)")
+            else:
+                console.print(f"[bold green]✓ Venue updated to:[/bold green] [bold yellow]{chosen_cand.get('name')}[/bold yellow] (No setlist found on this date)")
+            console.print("[dim]Candidate updated. You can approve it now or inspect further.[/dim]\n")
         elif choice == "e":
             new_title = Prompt.ask("Override Song Title", default=ident.detected_song_title if ident else "")
             new_artist = Prompt.ask("Override Artist", default=ident.detected_artist if ident else (concert.headliner_artist if concert else ""))

@@ -178,6 +178,83 @@ class TestWebServer(AioHTTPTestCase):
         self.assertEqual(data["ingested_count"], 1)
         self.mock_coord.photos_client.delete_picker_session.assert_called_once_with("sess_123")
 
+    async def test_video_thumbnail_fallback(self):
+        """Verify /api/video/{id}/thumbnail returns fallback SVG when not found."""
+        self.mock_db.get_video.return_value = None
+        resp = await self.client.get("/api/video/v_nonexistent/thumbnail")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.content_type, "image/svg+xml")
+        text = await resp.text()
+        self.assertIn("<svg", text)
+        self.assertIn("Video Preview Frame", text)
+
+    async def test_venue_search_endpoint(self):
+        """Verify /api/venues/search calls venue_search_engine and returns results."""
+        self.mock_coord.venue_search_engine.search.return_value = [
+            {
+                "name": "Come and Take It Live",
+                "city": "Austin",
+                "state": "TX",
+                "country": "US",
+                "formatted_address": "2015 E Riverside Dr, Austin, TX",
+                "latitude": 30.2408,
+                "longitude": -97.7288,
+                "setlist_fm_venue_id": "63d55e97",
+                "osm_id": "382484067",
+                "sources": ["local", "setlist_fm"],
+            }
+        ]
+        resp = await self.client.get("/api/venues/search?q=Come&city=Austin")
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["venues"][0]["name"], "Come and Take It Live")
+        self.mock_coord.venue_search_engine.search.assert_called_once_with(
+            query="Come",
+            city="Austin",
+            limit=15,
+        )
+
+    async def test_set_video_venue_endpoint(self):
+        """Verify /api/video/{id}/set-venue links venue and re-identifies concert."""
+        fake_video = Video(
+            id="v_100",
+            source_photo_id="sp_100",
+            filename="IMG_6130.MOV",
+            duration_seconds=25.0,
+            processing_status=VideoStatus.PENDING_REVIEW,
+        )
+        fake_concert = MagicMock()
+        fake_concert.model_dump.return_value = {"id": "c_1", "headliner_artist": "Attila"}
+        fake_ident = MagicMock()
+        fake_ident.model_dump.return_value = {"id": "id_1", "detected_song_title": "About That Life"}
+
+        self.mock_coord.reidentify_video_with_venue.return_value = (fake_video, fake_concert, fake_ident)
+
+        payload = {
+            "venue_name": "Come and Take It Live",
+            "city": "Austin",
+            "state_province": "TX",
+            "country_code": "US",
+            "latitude": 30.2408,
+            "longitude": -97.7288,
+            "setlist_fm_venue_id": "63d55e97",
+        }
+        resp = await self.client.post("/api/video/v_100/set-venue", json=payload)
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["video"]["id"], "v_100")
+        self.mock_coord.reidentify_video_with_venue.assert_called_once()
+
+    async def test_set_video_venue_validation_error(self):
+        """Verify /api/video/{id}/set-venue requires venue_name."""
+        resp = await self.client.post("/api/video/v_100/set-venue", json={})
+        self.assertEqual(resp.status, 400)
+        data = await resp.json()
+        self.assertFalse(data["success"])
+        self.assertIn("Missing venue_name", data["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

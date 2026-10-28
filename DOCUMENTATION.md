@@ -358,7 +358,33 @@ stagesync upload --limit 3 --privacy public
 
 ---
 
-## 7. Swarm Multi-Agent Execution Roadmap
+## 7. User-Assisted Search & Re-Identification System
+
+When automated geospatial or photo neighbor correlation yields no venue or ambiguous results, users can intervene directly via both the Web Dashboard and the CLI Review Queue.
+
+### 7.1 Interactive Web Modal ("What venue is this?")
+1. **Video Still Extraction**:
+   - `GET /api/video/{id}/thumbnail`: Extracts a normalized 16:9 still frame via FFmpeg seeking to 1.0s (fallback to 0.0s). Cached at `cache/thumbnails/{id}.jpg` and delivered at ~20-40KB for instant rendering.
+   - Fallback SVG placeholder is delivered with `image/svg+xml` if the file is not downloaded locally.
+2. **Federated Multi-Provider Venue Search**:
+   - `GET /api/venues/search?q={query}&city={city}`: Concurrently searches:
+     - Local SQLite database (`venues` table).
+     - Setlist.fm REST API v2 (`/search/venues`).
+     - OpenStreetMap / Nominatim POI forward search (`/search`).
+   - Results are deduplicated by canonical name and city, enriched with OpenStreetMap IDs and Setlist.fm venue IDs, and sorted by relevance.
+3. **One-Click Re-Identification**:
+   - `POST /api/video/{id}/set-venue`: Links the selected venue, updates video coordinates, triggers Setlist.fm concert correlation on the recorded date, links the artist/setlist, updates YouTube draft metadata, and marks the video for review.
+
+### 7.2 CLI Review Queue Venue Action (`[V] Set/Search Venue`)
+Within `stagesync review`:
+- Prompt includes `[V] Set/Search Venue`.
+- Conducts live terminal search against DB, Setlist.fm, and OSM.
+- Presents candidate venues in a rich table with numbered selection.
+- Immediately applies re-identification and outputs the matched artist and concert.
+
+---
+
+## 8. Swarm Multi-Agent Execution Roadmap
 
 To construct StageSync with zero regression and maximum engineering speed, the Swarm Director delegates tasks across specialized agents:
 

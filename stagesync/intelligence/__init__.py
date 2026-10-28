@@ -9,6 +9,8 @@ from stagesync.intelligence.setlist_fm import (
     SetlistSong,
 )
 from stagesync.intelligence.shazam_matcher import AcousticMatchResult, ShazamMatcher
+from stagesync.intelligence.thumbnail_extractor import ThumbnailExtractor
+from stagesync.intelligence.venue_search import VenueSearchEngine
 
 __all__ = [
     "AudioExtractor",
@@ -21,4 +23,6 @@ __all__ = [
     "AcousticMatchResult",
     "AIAudioJudge",
     "AIAudioJudgeResult",
+    "ThumbnailExtractor",
+    "VenueSearchEngine",
 ]
