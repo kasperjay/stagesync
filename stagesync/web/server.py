@@ -1073,6 +1073,17 @@ HTML_PAGE = """<!DOCTYPE html>
         updateDot('dot-gemini', 'text-gemini', statusData.services.gemini_audio?.has_key);
 
         renderCurrentView();
+
+        if (activeTab === 'review' && !window._autoPromptedBandReviewModal) {
+          window._autoPromptedBandReviewModal = true;
+          setTimeout(() => {
+            const pending = getFilteredVideos().filter(v => v.processing_status === 'PENDING_REVIEW');
+            const firstNeeding = pending.find(v => isUnidentifiedSong(v));
+            if (firstNeeding) {
+              openBandAssistModal(firstNeeding.id);
+            }
+          }, 350);
+        }
       } catch (err) {
         console.error('Failed to load status', err);
       } finally {
@@ -1126,6 +1137,17 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('page-title').innerText = viewNames[tab] || 'Task Management Pipeline';
 
       renderCurrentView();
+
+      if (tab === 'review' && !window._autoPromptedBandReviewModal) {
+        window._autoPromptedBandReviewModal = true;
+        setTimeout(() => {
+          const pending = getFilteredVideos().filter(v => v.processing_status === 'PENDING_REVIEW');
+          const firstNeeding = pending.find(v => isUnidentifiedSong(v));
+          if (firstNeeding) {
+            openBandAssistModal(firstNeeding.id);
+          }
+        }, 300);
+      }
     }
 
     function setStatusFilter(filter) {
@@ -1307,7 +1329,35 @@ HTML_PAGE = """<!DOCTYPE html>
         return;
       }
 
-      container.innerHTML = pending.map(v => {
+      const needingBandList = pending.filter(v => isUnidentifiedSong(v));
+      const needingBandCount = needingBandList.length;
+      const firstNeeding = needingBandList[0];
+
+      let headerBanner = '';
+      if (needingBandCount > 0 && firstNeeding) {
+        headerBanner = `
+          <div class="bg-gradient-to-r from-amber-500/20 via-amber-600/10 to-transparent border border-amber-500/40 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg shadow-amber-500/5 mb-4">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center flex-shrink-0">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+              </div>
+              <div>
+                <div class="font-bold text-sm text-white flex items-center gap-2">
+                  <span>Lineup Identification Required</span>
+                  <span class="px-2 py-0.5 rounded-full text-[10px] bg-amber-500 text-black font-mono font-bold">${needingBandCount} Clip(s)</span>
+                </div>
+                <p class="text-xs text-zinc-300 mt-0.5">Concert is correlated, but the performing band must be selected from the show's roster.</p>
+              </div>
+            </div>
+            <button type="button" onclick="openBandAssistModal('${firstNeeding.id}')" class="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-bold text-xs shadow-md shadow-amber-500/25 flex items-center gap-1.5 transition flex-shrink-0 cursor-pointer">
+              <span>🎸 Open Band Selection Pop-up</span>
+              <span>→</span>
+            </button>
+          </div>
+        `;
+      }
+
+      container.innerHTML = headerBanner + pending.map(v => {
         const c = v.concert || {};
         const ident = v.identification || {};
         const conf = ident.match_confidence ? Math.round(ident.match_confidence * 100) : 0;
@@ -1323,25 +1373,40 @@ HTML_PAGE = """<!DOCTYPE html>
             <div class="flex flex-col md:flex-row gap-4">
               
               <!-- Video Still Preview -->
-              <div class="w-full md:w-44 h-28 rounded-xl overflow-hidden border border-border bg-black/40 flex-shrink-0 relative group cursor-pointer" onclick="openVenueAssistModal('${v.id}')">
+              <div class="w-full md:w-44 h-28 rounded-xl overflow-hidden border border-border bg-black/40 flex-shrink-0 relative group cursor-pointer" onclick="${needsBandAssist ? `openBandAssistModal('${v.id}')` : `openVenueAssistModal('${v.id}')`}">
                 <img src="/api/video/${v.id}/thumbnail" alt="" class="w-full h-full object-cover">
-                <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-1 text-[11px] text-white font-semibold transition p-2 text-center">
-                  <svg class="w-4 h-4 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-                  <span>What venue is this?</span>
+                <div class="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-1 text-[11px] text-white font-semibold transition p-2 text-center">
+                  ${needsBandAssist ? `
+                    <svg class="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+                    <span class="text-amber-400 font-bold">Which band is this?</span>
+                    <span class="text-[9px] text-zinc-300 font-normal">Click for Pop-up</span>
+                  ` : `
+                    <svg class="w-4 h-4 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                    <span>What venue is this?</span>
+                  `}
                 </div>
               </div>
 
               <!-- Video & Match Details -->
               <div class="flex-1 space-y-3">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-2.5">
-                  <button type="button" class="text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded-lg p-0.5" onclick="openDrawer('${v.id}')">
-                    <span class="text-xs font-mono text-zinc-400">${v.filename}</span>
-                    <h3 class="text-base font-bold text-zinc-100 flex items-center gap-2 mt-0.5">
-                      <span class="hover:text-brand-300 transition">${artist}</span>
-                      <span class="text-zinc-400 font-normal">—</span>
-                      <span class="text-brand-400 font-semibold">${song}</span>
-                    </h3>
-                  </button>
+                  <div class="text-left space-y-0.5">
+                    <div class="flex items-center gap-2">
+                      <span class="text-xs font-mono text-zinc-400">${v.filename}</span>
+                      ${needsBandAssist ? `
+                        <button type="button" onclick="openBandAssistModal('${v.id}')" class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500 hover:text-black transition">
+                          🎸 Select Band
+                        </button>
+                      ` : ''}
+                    </div>
+                    <button type="button" class="text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded p-0" onclick="openDrawer('${v.id}')">
+                      <h3 class="text-base font-bold text-zinc-100 flex items-center gap-2 mt-0.5">
+                        <span class="hover:text-brand-300 transition">${artist}</span>
+                        <span class="text-zinc-400 font-normal">—</span>
+                        <span class="text-brand-400 font-semibold">${song}</span>
+                      </h3>
+                    </button>
+                  </div>
                   <div class="flex items-center gap-2">
                     <span class="text-xs px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-semibold">
                       ${conf}% Match
@@ -1380,8 +1445,9 @@ HTML_PAGE = """<!DOCTYPE html>
                         <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
                         Which band is this? (Concert Matched • Song Unconfirmed)
                       </span>
-                      <button type="button" onclick="openBandAssistModal('${v.id}')" class="text-xs text-amber-300 font-semibold hover:underline flex items-center gap-1">
-                        Still & Full Lineup →
+                      <button type="button" onclick="openBandAssistModal('${v.id}')" class="px-2.5 py-1 text-xs text-black font-bold bg-amber-400 hover:bg-amber-300 rounded-lg shadow-sm flex items-center gap-1 transition">
+                        <span>🎸 Open Pop-up Selector</span>
+                        <span>→</span>
                       </button>
                     </div>
                     <div class="flex flex-wrap gap-1.5 items-center">
@@ -1404,16 +1470,17 @@ HTML_PAGE = """<!DOCTYPE html>
                   <span>View Full Metadata & Setlist</span>
                   <span>→</span>
                 </button>
-                <button onclick="openVenueAssistModal('${v.id}')" class="text-xs text-brand-400 hover:text-brand-300 font-semibold flex items-center gap-1">
-                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-                  <span>What venue is this?</span>
-                </button>
                 ${needsBandAssist ? `
-                  <button onclick="openBandAssistModal('${v.id}')" class="text-xs text-amber-400 hover:text-amber-300 font-semibold flex items-center gap-1">
+                  <button onclick="openBandAssistModal('${v.id}')" class="text-xs text-amber-300 hover:text-white font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 transition">
                     <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
-                    <span>Which band is this?</span>
+                    <span>Which band is this? (Pop-up)</span>
                   </button>
-                ` : ''}
+                ` : `
+                  <button onclick="openVenueAssistModal('${v.id}')" class="text-xs text-brand-400 hover:text-brand-300 font-semibold flex items-center gap-1">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                    <span>What venue is this?</span>
+                  </button>
+                `}
               </div>
               <div class="flex items-center gap-2">
                 <button onclick="rejectVideo('${v.id}')" class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-card-subtle hover:bg-rose-950/40 hover:text-rose-300 hover:border-rose-800 border border-border transition">
@@ -1975,8 +2042,15 @@ HTML_PAGE = """<!DOCTYPE html>
         }
 
         const vidId = activeBandAssistVideoId;
-        closeBandAssistModal();
         await loadData();
+
+        // Check if there are other pending videos needing band identification
+        const remaining = (videosData || []).filter(item => item.id !== vidId && item.processing_status === 'PENDING_REVIEW' && isUnidentifiedSong(item));
+        if (remaining.length > 0) {
+          openBandAssistModal(remaining[0].id);
+        } else {
+          closeBandAssistModal();
+        }
 
         if (activeSelectedVideo && activeSelectedVideo.id === vidId) {
           openDrawer(vidId);

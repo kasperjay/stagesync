@@ -427,8 +427,16 @@ def cmd_review(args: argparse.Namespace) -> None:
         console.print("-" * 80)
 
         # Action Prompt
+        song_title = (ident.detected_song_title if ident else "").strip().lower()
+        is_unconfirmed_song = not song_title or song_title in ["live performance", "unidentified clip", "unidentified song", "unknown"] or (ident and ident.match_confidence < 0.50)
+        default_choice = "b" if (concert and is_unconfirmed_song) else "a"
+
+        if concert and is_unconfirmed_song:
+            console.print("[bold yellow]🎸 LINEUP ACTION: Concert correlated, but performing band & song are unconfirmed.[/bold yellow]")
+            console.print("[bold yellow]   Press [B] to select who performed in this clip from the show's lineup roster.[/bold yellow]\n")
+
         console.print("[bold white][A][/bold white] Approve & Queue Upload   [bold white][B][/bold white] Which band is this?   [bold white][V][/bold white] Set/Search Venue   [bold white][E][/bold white] Edit Metadata   [bold white][P][/bold white] Change Privacy   [bold white][R][/bold white] Reject   [bold white][S][/bold white] Skip")
-        choice = Prompt.ask("Selection", choices=["a", "b", "v", "e", "p", "r", "s", "A", "B", "V", "E", "P", "R", "S"], default="a").lower()
+        choice = Prompt.ask("Selection", choices=["a", "b", "v", "e", "p", "r", "s", "A", "B", "V", "E", "P", "R", "S"], default=default_choice).lower()
 
         if choice == "a":
             coordinator.approve_video(vid.id)
