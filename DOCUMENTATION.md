@@ -81,7 +81,22 @@ flowchart TD
 
 ---
 
-## 2. End-to-End Sequence Lifecycle
+## 2. Google Photos API Scope Change (2025)
+
+Google deprecated the `photoslibrary.readonly` scope on March 31, 2025. This means the Library API can no longer scan a user's full photo library. The remaining valid scopes are:
+
+- `photoslibrary.readonly.appcreateddata` — only returns media items created by this app
+- `photospicker.mediaitems.readonly` — used by the Google Photos Picker API for user-selected videos
+- `photoslibrary.appendonly` — for uploading, not discovery
+
+**Recommended ingestion paths**:
+1. **Picker flow** (`stagesync scan --picker`) — user selects videos from their library via Google's Picker UI
+2. **Local Directory** (`stagesync scan --dir /path/to/concert_videos`) — scan a locally synced folder of concert videos
+3. **App-created media only** (Library API `mediaItems:search`) — only returns videos previously uploaded by this app
+
+---
+
+## 3. End-to-End Sequence Lifecycle
 
 The following sequence illustrates the exact execution path of a single concert video from Google Photos discovery through YouTube publication:
 
@@ -100,9 +115,17 @@ sequenceDiagram
     participant UI as CLI / Web Reviewer
     participant YT as YouTube Data API v3
 
-    User->>Worker: Run `stagesync scan --days 30`
-    Worker->>GP: POST /v1/mediaItems:search (mediaTypes=["VIDEO"])
-    GP-->>Worker: Return Video Item (id, baseUrl, creationTime)
+    User->>Worker: Run `stagesync scan --picker` or `--dir /path/to/concert_videos`
+    alt Picker flow
+        Worker->>GP: POST /v1/sessions (Picker API)
+        GP-->>Worker: Return pickerUri
+        User->>User: Select concert videos in Google Photos Picker UI
+        Worker->>GP: GET /v1/sessions/{id}/mediaItems (poll)
+        GP-->>Worker: Return selected items (id, baseUrl, creationTime)
+    else Local Directory flow
+        Worker->>Worker: Scan local directory for video files (.mp4, .mov)
+        Worker->>Worker: Check creation time & GPS via ffprobe
+    end
     Worker->>DB: Check if source_photo_id exists
     alt Already Processed
         Worker->>Worker: Skip item
@@ -149,7 +172,7 @@ sequenceDiagram
 
 ---
 
-## 3. Directory & Component Boundaries
+## 4. Directory & Component Boundaries
 
 The project is structured as a high-cohesion, low-coupling modular workspace located in `/home/workspace/stagesync/`:
 
@@ -203,7 +226,7 @@ The project is structured as a high-cohesion, low-coupling modular workspace loc
 
 ---
 
-## 4. Step-by-Step Setup & Authentication Guide
+## 5. Step-by-Step Setup & Authentication Guide
 
 ### 4.1 Prerequisites & Toolchain Verification
 Ensure all required system binaries are present:
@@ -263,7 +286,7 @@ STAGESYNC_MAX_DAILY_UPLOADS=5          # YouTube API quota preservation guardrai
 
 ---
 
-## 5. CLI & Web UI Operational Specifications
+## 6. CLI & Web UI Operational Specifications
 
 ### 5.1 Command-Line Interface (CLI)
 
@@ -335,7 +358,7 @@ stagesync upload --limit 3 --privacy public
 
 ---
 
-## 6. Swarm Multi-Agent Execution Roadmap
+## 7. Swarm Multi-Agent Execution Roadmap
 
 To construct StageSync with zero regression and maximum engineering speed, the Swarm Director delegates tasks across specialized agents:
 

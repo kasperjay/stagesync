@@ -608,17 +608,31 @@ class PipelineCoordinator:
             self._audit_step(video.id, PipelineStep.SPATIAL_CORRELATION, step_spatial_correlate)
 
         # ---------------------------------------------------------------------
-        # Step 2: Reverse Geocoding (Nominatim)
+        # Step 2: Reverse Geocoding & Venue Resolution
         # ---------------------------------------------------------------------
         resolved_venue: Optional[Venue] = None
 
         if video.latitude is not None and video.longitude is not None:
             def step_geo():
                 nonlocal resolved_venue
+                # 1. Proximity check: Look for known venue within ~350m in local database
+                nearby_venue = self.db.find_venue_by_coords(video.latitude, video.longitude, tolerance=0.005)
+                if nearby_venue and nearby_venue.name.lower() != nearby_venue.city.lower():
+                    logger.info("Found existing nearby venue '%s' for coordinates (%.4f, %.4f)", nearby_venue.name, video.latitude, video.longitude)
+                    resolved_venue = nearby_venue
+                    return StepStatus.SUCCESS, nearby_venue.model_dump(), None
+
+                # 2. Reverse geocode via Nominatim
                 loc = self.geocoder.reverse_geocode(video.latitude, video.longitude)
-                # Save venue entity
+
+                venue_name = loc.venue_name
+                # NEVER fallback to city name! A city is NOT a venue name.
+                if not venue_name:
+                    street = loc.display_name.split(",")[0].strip() if loc.display_name else "Live Venue"
+                    venue_name = f"Venue near {street}"
+
                 venue = Venue(
-                    name=loc.venue_name or loc.city or "Live Venue",
+                    name=venue_name,
                     formatted_address=loc.display_name,
                     city=loc.city,
                     state_province=loc.state_province,
@@ -644,22 +658,40 @@ class PipelineCoordinator:
 
         if event_date_str:
             def step_concert():
-                nonlocal matched_concert
+                nonlocal matched_concert, resolved_venue
                 res: Optional[MatchedConcert] = None
-                if video.latitude is not None and video.longitude is not None:
-                    res = self.setlist_client.search_by_geo_and_date(
+
+                # 1. Search by exact venue name on event date if venue is known
+                if resolved_venue and resolved_venue.name and not resolved_venue.name.startswith("Venue near"):
+                    res = self.setlist_client.search_by_venue_and_date(
                         event_date=event_date_str,
-                        latitude=video.latitude,
-                        longitude=video.longitude,
-                        radius_km=10,
+                        venue_name=resolved_venue.name,
+                        city_name=resolved_venue.city,
                     )
+                    # If recorded after local midnight, also check adjacent UTC date
+                    if not res and video.recorded_at_utc and video.recorded_at_utc[:10] != event_date_str:
+                        res = self.setlist_client.search_by_venue_and_date(
+                            event_date=video.recorded_at_utc[:10],
+                            venue_name=resolved_venue.name,
+                            city_name=resolved_venue.city,
+                        )
+
+                # 2. Search by city with venue name hint
                 if not res and resolved_venue and resolved_venue.city:
                     res = self.setlist_client.search_by_city_and_date(
                         event_date=event_date_str,
                         city_name=resolved_venue.city,
+                        venue_name_hint=resolved_venue.name if resolved_venue else None,
                     )
 
                 if res:
+                    # If Setlist.fm returned a verified venue name, ensure resolved_venue reflects it
+                    if resolved_venue and res.venue_name and res.venue_name != "Unknown Venue":
+                        if resolved_venue.name.startswith("Venue near") or resolved_venue.name.lower() == resolved_venue.city.lower():
+                            resolved_venue.name = res.venue_name
+                            resolved_venue.setlist_fm_venue_id = res.venue_id
+                            resolved_venue = self.db.save_venue(resolved_venue)
+
                     venue_id = resolved_venue.id if resolved_venue else None
                     concert = Concert(
                         venue_id=venue_id,

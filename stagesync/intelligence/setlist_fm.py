@@ -89,52 +89,115 @@ class SetlistFmClient:
         dt = dt_parser.parse(date_val)
         return dt.strftime("%Y-%m-%d")
 
-    def search_by_geo_and_date(
+    def search_by_venue_and_date(
         self,
         event_date: str,
-        latitude: float,
-        longitude: float,
-        radius_km: int = 5,
+        venue_name: str,
+        city_name: Optional[str] = None,
     ) -> Optional[MatchedConcert]:
-        """Search setlists matching exact event date and geographic radius."""
-        if not self.api_key:
-            logger.info("SETLIST_FM_API_KEY not configured, skipping Setlist.fm geo query.")
+        """Search setlists matching exact venue name and event date."""
+        if not self.api_key or not venue_name:
             return None
 
         date_param = self._format_date_for_api(event_date)
-        params = {
+        params: Dict[str, str] = {
             "date": date_param,
-            "lat": f"{latitude:.4f}",
-            "long": f"{longitude:.4f}",
-            "radius": str(radius_km),
+            "venueName": venue_name,
         }
-        return self._query_setlists(params, fallback_date=event_date)
+        if city_name:
+            params["cityName"] = city_name
+
+        data = self._fetch_setlists_raw(params)
+        if not data and city_name:
+            # Retry without cityName constraint in case of administrative city mismatch
+            params_retry = {"date": date_param, "venueName": venue_name}
+            data = self._fetch_setlists_raw(params_retry)
+
+        if not data:
+            return None
+
+        setlists = data.get("setlist", [])
+        if not setlists:
+            return None
+
+        # Return best match (prioritize setlist with tracks)
+        best = setlists[0]
+        for s in setlists:
+            sets = s.get("sets", {}).get("set", [])
+            if sets:
+                best = s
+                break
+
+        return self.parse_setlist_payload(best, event_date)
 
     def search_by_city_and_date(
         self,
         event_date: str,
         city_name: str,
         artist_name: Optional[str] = None,
+        venue_name_hint: Optional[str] = None,
+        max_pages: int = 3,
     ) -> Optional[MatchedConcert]:
-        """Search setlists by city name and event date with optional artist filter."""
-        if not self.api_key:
+        """Search setlists by city name and event date with optional artist or venue filter."""
+        if not self.api_key or not city_name:
             return None
 
         date_param = self._format_date_for_api(event_date)
-        params: Dict[str, str] = {
-            "date": date_param,
-            "cityName": city_name,
-        }
-        if artist_name:
-            params["artistName"] = artist_name
 
-        return self._query_setlists(params, fallback_date=event_date)
+        for page in range(1, max_pages + 1):
+            params: Dict[str, str] = {
+                "date": date_param,
+                "cityName": city_name,
+                "p": str(page),
+            }
+            if artist_name:
+                params["artistName"] = artist_name
 
-    def _query_setlists(
+            data = self._fetch_setlists_raw(params)
+            if not data:
+                break
+            setlists = data.get("setlist", [])
+            if not setlists:
+                break
+
+            # If venue_name_hint is provided, match by venue name
+            if venue_name_hint:
+                hint_lower = venue_name_hint.lower().strip()
+                for s in setlists:
+                    v_name = s.get("venue", {}).get("name", "").lower()
+                    if hint_lower in v_name or v_name in hint_lower:
+                        return self.parse_setlist_payload(s, event_date)
+
+            # If artist_name was specified and matched
+            if artist_name:
+                return self.parse_setlist_payload(setlists[0], event_date)
+
+            # If only 1 setlist exists for the whole city on that date and no venue hint
+            if len(setlists) == 1 and not venue_name_hint:
+                return self.parse_setlist_payload(setlists[0], event_date)
+
+        return None
+
+    def search_by_geo_and_date(
         self,
-        params: Dict[str, str],
-        fallback_date: str,
+        event_date: str,
+        latitude: float,
+        longitude: float,
+        radius_km: int = 5,
+        city_hint: Optional[str] = None,
+        venue_hint: Optional[str] = None,
     ) -> Optional[MatchedConcert]:
+        """Setlist.fm API v2 search/setlists does not support lat/long params natively.
+        Routes to search_by_venue_and_date or search_by_city_and_date with spatial constraints."""
+        if venue_hint:
+            res = self.search_by_venue_and_date(event_date=event_date, venue_name=venue_hint, city_name=city_hint)
+            if res:
+                return res
+        if city_hint:
+            return self.search_by_city_and_date(event_date=event_date, city_name=city_hint, venue_name_hint=venue_hint)
+        return None
+
+    def _fetch_setlists_raw(self, params: Dict[str, str]) -> Optional[Dict[str, Any]]:
         """Execute HTTP request against Setlist.fm search endpoint."""
         self._enforce_rate_limit()
 
@@ -151,9 +214,19 @@ class SetlistFmClient:
                 logger.debug("No setlists found for params: %s", params)
                 return None
             res.raise_for_status()
-            data = res.json()
+            return res.json()
         except Exception as e:
             logger.warning("Setlist.fm request failed: %s", e)
+            return None
+
+    def _query_setlists(
+        self,
+        params: Dict[str, str],
+        fallback_date: str,
+    ) -> Optional[MatchedConcert]:
+        """Execute HTTP request against Setlist.fm search endpoint."""
+        data = self._fetch_setlists_raw(params)
+        if not data:
             return None
 
         setlists = data.get("setlist", [])

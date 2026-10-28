@@ -1,5 +1,6 @@
 """Unit tests for YouTube Resumable Chunked Uploader and daily quota guardrails."""
 
+import datetime
 from pathlib import Path
 import tempfile
 import unittest
@@ -35,19 +36,20 @@ class TestResumableUpload(unittest.TestCase):
         self.db.save_video(Video(id="v2", source_photo_id="sp_2", filename="v2.mp4"))
 
         # Simulate 2 uploads today (reaching quota of 2)
+        today_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         up1 = YouTubeUpload(
             video_id="v1",
             title="Concert 1",
             description="desc",
             upload_status="COMPLETED",
-            uploaded_at="2026-10-26T10:00:00Z",
+            uploaded_at=today_iso,
         )
         up2 = YouTubeUpload(
             video_id="v2",
             title="Concert 2",
             description="desc",
             upload_status="COMPLETED",
-            uploaded_at="2026-10-26T10:30:00Z",
+            uploaded_at=today_iso,
         )
         self.db.save_youtube_upload(up1)
         self.db.save_youtube_upload(up2)
@@ -55,6 +57,7 @@ class TestResumableUpload(unittest.TestCase):
         self.assertFalse(self.uploader.check_daily_quota())
 
     def test_upload_file_quota_exceeded_aborts_immediately(self) -> None:
+        today_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         # Create parent videos and fill quota
         for i in range(2):
             vid_id = f"vid_{i}"
@@ -65,7 +68,7 @@ class TestResumableUpload(unittest.TestCase):
                     title=f"Title {i}",
                     description="desc",
                     upload_status="COMPLETED",
-                    uploaded_at="2026-10-26T10:00:00Z",
+                    uploaded_at=today_iso,
                 )
             )
 

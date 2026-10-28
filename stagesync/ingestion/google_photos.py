@@ -25,7 +25,6 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 PHOTOS_READONLY_SCOPE = (
     "https://www.googleapis.com/auth/photospicker.mediaitems.readonly "
-    "https://www.googleapis.com/auth/photoslibrary.readonly "
     "https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata"
 )
 
@@ -245,7 +244,16 @@ class GooglePhotosClient:
         page_size: int = 50,
         page_token: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-        """Query Google Photos for video items matching search criteria and date range."""
+        """Query Google Photos for video items matching search criteria and date range.
+
+        NOTE (2025+): Google removed the `photoslibrary.readonly` scope on March 31,
+        2025. The remaining `photoslibrary.readonly.appcreateddata` scope only returns
+        media items created by this app itself — it cannot scan the user's full library.
+
+        Use `create_picker_session` / `poll_picker_session` / `get_picker_items` (Picker
+        API) as the primary ingestion path instead. `list_videos` is retained for
+        cataloging app-created items only.
+        """
         access_token = self.get_access_token()
         headers = {
             "Authorization": f"Bearer {access_token}",

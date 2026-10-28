@@ -114,7 +114,7 @@ Manually organizing, identifying, trimming, tagging, and uploading these videos 
 
 | Phase | Milestone | Scope & Deliverables | Exit Criteria |
 | :--- | :--- | :--- | :--- |
-| **Phase 1** | **Ingestion & Metadata Foundation (MVP)** | • Google Photos OAuth2 & API client (`mediaItems:search` for videos).<br>• Local caching engine & file integrity verification (SHA-256).<br>• Container inspection: `ffprobe` + QuickTime ISO 6709 GPS / creation timestamp extraction.<br>• SQLite local database schema & DDL execution.<br>• Nominatim / OpenStreetMap reverse geocoding with local cache. | Download 5 sample concert videos, extract exact lat/long and timestamp, resolve city/venue name with 100% accuracy. |
+| **Phase 1** | **Ingestion & Metadata Foundation (MVP)** | • Google Photos OAuth2 & API client (Picker API + Library API; broad scans retired due to 2025 scope removal).<br>• Local caching engine & file integrity verification (SHA-256).<br>• Container inspection: `ffprobe` + QuickTime ISO 6709 GPS / creation timestamp extraction.<br>• SQLite local database schema & DDL execution.<br>• Nominatim / OpenStreetMap reverse geocoding with local cache. | Download 5 sample concert videos, extract exact lat/long and timestamp, resolve city/venue name with 100% accuracy. |
 | **Phase 2** | **Concert & Song Identification Engine** | • Setlist.fm API v2 integration (geo + date search, lineup & full setlist parsing).<br>• Audio demuxing & normalization via `ffmpeg` (44.1kHz mono PCM/MP3).<br>• Dual-layer audio identification:<br>  - Layer 1: `shazamio` acoustic fingerprinting.<br>  - Layer 2: Gemini 2.5 Flash setlist-constrained multimodal audio analysis.<br>• Concert candidate classifier (time-of-day, audio SPL, venue radius). | Achieve ≥ 90% song identification accuracy across a benchmark of 20 live concert clips. |
 | **Phase 3** | **YouTube Publishing & Review CLI** | • YouTube Data API v3 OAuth2 integration.<br>• 8MB chunked resumable upload client with network retry and progress bar.<br>• Smart titling & description templating engine.<br>• Interactive CLI Reviewer (`rich` / `curses`) with dry-run mode.<br>• State machine orchestration: `DISCOVERED` -> `PENDING_REVIEW` -> `APPROVED` -> `PUBLISHED`. | Successfully upload an approved concert video to YouTube with title, description, tags, and private/unlisted status. |
 | **Phase 4** | **Web Dashboard & Swarm Automation** | • Modern Next.js / Tailwind CSS web dashboard for visual video review.<br>• Background scheduler / cron watcher polling Google Photos for new concert clips.<br>• Audio stem separation (Demucs / Spleeter) for crowd-noise suppression prior to identification.<br>• Multi-user support with PostgreSQL + Row Level Security (RLS). | End-to-end zero-touch discovery through web-based one-click approval and publication. |
@@ -125,33 +125,26 @@ Manually organizing, identifying, trimming, tagging, and uploading these videos 
 
 ### 4.1 Ingestion & Discovery (Google Photos Library API)
 - **API Base**: `https://photoslibrary.googleapis.com/v1`
-- **Authentication**: OAuth 2.0 with scopes:
-  - `https://www.googleapis.com/auth/photoslibrary.readonly`
+- **Authentication**: OAuth 2.0 with the remaining valid scope:
   - `https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata`
+  *(Google removed `photoslibrary.readonly` on March 31, 2025 — only app-created media is accessible via Library API)
+  - (For user-selected media, the [Google Photos Picker API](https://developers.google.com/photos/picker) uses its own [`photospicker.mediaitems.readonly`](https://developers.google.com/photos/picker/reference/request-options) scope)
+  - `https://www.googleapis.com/auth/photoslibrary.appendonly` — for uploading, not discovery)
 - **Discovery Strategy**:
-  - Endpoint: `POST /v1/mediaItems:search`
-  - Request Payload:
-    ```json
-    {
-      "pageSize": 50,
-      "filters": {
-        "mediaTypeFilter": {
-          "mediaTypes": ["VIDEO"]
-        },
-        "dateFilter": {
-          "ranges": [
-            {
-              "startDate": { "year": 2022, "month": 1, "day": 1 },
-              "endDate": { "year": 2026, "month": 12, "day": 31 }
-            }
-          ]
-        }
-      }
-    }
-    ```
+  1. **Picker API flow** (recommended for user-selected videos): The Google Photos Picker lets users select specific videos from their library. This works with the restricted scope.
+    - Launch via: `stagesync scan --picker`
+    - User picks videos in browser, then imports selected items
+  2. **Local Directory scanning** (automatic discovery): Scan a locally synced folder of concert videos.
+    - Launch via: `stagesync scan --dir /path/to/concert_videos`
+  3. **App-created media only** (Library API `mediaItems:search`): Returns only media items created by this app itself.
+    - Endpoint: `POST /v1/mediaItems:search`
+    - Request Payload: {"pageSize": 50, "filters": {"mediaTypeFilter": {"mediaTypes": ["VIDEO"]}}}
+    - NOTE: Will only find videos previously uploaded by this StageSync app instance
 - **Video Download Mechanics**:
-  - The API returns a `baseUrl`. For videos, appending `=dv` initiates the original video binary stream (preserving QuickTime atoms and EXIF tags).
-  - Rate Limiting & Quota: 10,000 read requests per day. The client must implement adaptive backoff with local SQLite caching of `mediaItemId` to prevent redundant downloads.
+  - Picker-selected items return a `baseUrl`. For videos, appending `=dv` initiates the original video binary stream (preserving QuickTime atoms and EXIF tags).
+  - Local directory items are downloaded directly from the filesystem.
+  - App-created media items return a `baseUrl` via the Library API.
+- **Rate Limiting & Quota**: 10,000 read requests per day (for Library API when applicable). The client must implement adaptive backoff with local SQLite caching of `mediaItemId` to prevent redundant downloads.
 - **Candidate Filtering Heuristics**:
   1. **Duration Filter**: `10 seconds <= duration <= 900 seconds` (concert snippets or full songs; discards <10s pocket taps and >15m continuous recordings).
   2. **Temporal Filter**: Recorded between 17:30 and 02:30 local time (prime concert performance hours; configurable for daytime festivals).
