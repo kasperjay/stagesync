@@ -290,6 +290,7 @@ HTML_PAGE = """<!DOCTYPE html>
         <button onclick="setStatusFilter('PENDING_REVIEW')" id="filter-btn-PENDING_REVIEW" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium transition bg-card border-border text-zinc-400 hover:text-zinc-200">Needs Review</button>
         <button onclick="setStatusFilter('APPROVED')" id="filter-btn-APPROVED" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium transition bg-card border-border text-zinc-400 hover:text-zinc-200">Approved</button>
         <button onclick="setStatusFilter('PUBLISHED')" id="filter-btn-PUBLISHED" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium transition bg-card border-border text-zinc-400 hover:text-zinc-200">Published</button>
+        <button onclick="setStatusFilter('REJECTED')" id="filter-btn-REJECTED" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium transition bg-card border-border text-zinc-400 hover:text-zinc-200">Rejected</button>
         <button onclick="setStatusFilter('HIGH_CONF')" id="filter-btn-HIGH_CONF" class="px-2.5 py-1 rounded-lg border text-[11px] font-medium transition bg-card border-border text-zinc-400 hover:text-zinc-200">High Conf (≥90%)</button>
       </div>
     </div>
@@ -1164,7 +1165,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
     function setStatusFilter(filter) {
       activeStatusFilter = filter;
-      const filters = ['ALL', 'PENDING_REVIEW', 'APPROVED', 'PUBLISHED', 'HIGH_CONF'];
+      const filters = ['ALL', 'PENDING_REVIEW', 'APPROVED', 'PUBLISHED', 'REJECTED', 'HIGH_CONF'];
       filters.forEach(f => {
         const btn = document.getElementById(`filter-btn-${f}`);
         if (!btn) return;
@@ -1203,7 +1204,7 @@ HTML_PAGE = """<!DOCTYPE html>
         }
 
         // Status pill filter
-        if (activeStatusFilter === 'ALL') return true;
+        if (activeStatusFilter === 'ALL') return v.processing_status !== 'REJECTED';
         if (activeStatusFilter === 'HIGH_CONF') return conf >= 0.90;
         return v.processing_status === activeStatusFilter;
       });
@@ -1216,7 +1217,7 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     function renderBoard() {
-      const filtered = getFilteredVideos();
+      const filtered = getFilteredVideos().filter(v => v.processing_status !== 'REJECTED');
 
       // Group into 4 columns
       const cols = {

@@ -33,6 +33,10 @@ class TestWebServer(AioHTTPTestCase):
         text = await resp.text()
         self.assertIn("StageSync", text)
         self.assertIn("Review Queue", text)
+        self.assertIn("setStatusFilter('REJECTED')", text)
+        self.assertIn("activeStatusFilter === 'ALL') return v.processing_status !== 'REJECTED'", text)
+        self.assertIn("Lineup Identification Required", text)
+        self.assertIn("openBandAssistModal", text)
 
     async def test_get_status_json(self):
         """Verify /api/status returns valid system statistics."""
