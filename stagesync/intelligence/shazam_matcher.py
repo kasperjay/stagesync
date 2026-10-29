@@ -9,7 +9,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,18 @@ class ShazamMatcher:
             return asyncio.run(self.recognize_async(audio_path))
         except Exception:
             return asyncio.run(self.recognize_async(audio_path))
+
+    def recognize_many(
+        self,
+        audio_paths: List[Union[str, Path]],
+        max_workers: int = 4,
+    ) -> List[AcousticMatchResult]:
+        """Recognize multiple windows concurrently while preserving input order."""
+        if not audio_paths:
+            return []
+        worker_count = min(max(1, max_workers), len(audio_paths))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            return list(executor.map(self.recognize, audio_paths))
 
     def parse_shazam_payload(self, payload: Dict[str, Any]) -> AcousticMatchResult:
         """Parse raw Shazamio response dictionary."""

@@ -3,6 +3,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from stagesync.database.connection import Database
 from stagesync.database.models import (
@@ -15,6 +16,8 @@ from stagesync.database.models import (
     YouTubeUpload,
 )
 from stagesync.intelligence.setlist_fm import SetlistFmClient
+from stagesync.intelligence.ai_audio_judge import AIAudioJudgeResult
+from stagesync.intelligence.shazam_matcher import AcousticMatchResult
 from stagesync.pipeline import PipelineCoordinator
 
 
@@ -154,6 +157,82 @@ class TestUserAssistBandSelection(unittest.TestCase):
         # Lineup should now include Holy Fawn
         persisted_concert = self.db.get_concert(saved_concert.id)
         self.assertIn("Holy Fawn", persisted_concert.lineup_artists)
+
+    def test_reidentify_video_with_band_continues_to_song_matching(self):
+        """Selecting an artist should immediately attempt song identification."""
+        venue = self.db.save_venue(
+            Venue(
+                name="Come and Take It Live",
+                city="Austin",
+                state_province="TX",
+                country_code="US",
+                latitude=30.2408,
+                longitude=-97.7288,
+            )
+        )
+        concert = self.db.save_concert(
+            Concert(
+                venue_id=venue.id,
+                headliner_artist="Attila",
+                event_date="2023-10-13",
+                lineup_artists=["Attila", "Gideon"],
+                setlist_data={"sets": {"set": [{"song": [{"name": "Middle Fingers Up"}]}]}},
+            )
+        )
+        source_video = Path(self.tmp_dir.name) / "clip.mov"
+        source_video.write_bytes(b"video")
+        video = self.db.save_video(
+            Video(
+                source_photo_id="sp_band_song_1",
+                filename="clip.mov",
+                file_path=str(source_video),
+                duration_seconds=45.0,
+                venue_id=venue.id,
+                processing_status=VideoStatus.PENDING_REVIEW,
+            )
+        )
+        ident = self.db.save_identification(
+            Identification(
+                video_id=video.id,
+                concert_id=concert.id,
+                detected_artist="Attila",
+                detected_song_title="Live Performance",
+                match_confidence=0.0,
+                status="UNVERIFIED",
+            )
+        )
+
+        with patch.object(
+            self.coordinator.audio_extractor,
+            "extract_clip",
+            return_value=source_video,
+        ) as extract_clip, patch.object(
+            self.coordinator.shazam_matcher,
+            "recognize",
+            return_value=AcousticMatchResult(matched=False),
+        ), patch.object(
+            self.coordinator.ai_audio_judge,
+            "evaluate_live_clip",
+            return_value=AIAudioJudgeResult(
+                matched=True,
+                song_title="Middle Fingers Up",
+                confidence=0.91,
+                setlist_index=1,
+                lyrics_detected="middle fingers up",
+            ),
+        ) as evaluate_live_clip:
+            _, _, updated_ident = self.coordinator.reidentify_video_with_band(
+                video_id=video.id,
+                artist_name="Gideon",
+            )
+
+        extract_clip.assert_called_once()
+        evaluate_live_clip.assert_called_once()
+        self.assertEqual(updated_ident.detected_artist, "Gideon")
+        self.assertEqual(updated_ident.detected_song_title, "Middle Fingers Up")
+        self.assertEqual(updated_ident.match_confidence, 0.91)
+        self.assertEqual(updated_ident.track_number_in_setlist, 1)
+        self.assertEqual(updated_ident.status, "USER_ASSISTED_BAND")
 
     def test_lineup_extraction_from_setlist_payload(self):
         """Verify parse_setlist_payload aggregates lineup across all event setlists."""

@@ -56,9 +56,11 @@ class ThumbnailExtractor:
         """Return fallback SVG image bytes when video still cannot be rendered."""
         return FALLBACK_SVG
 
-    def get_cached_path(self, video_id: str) -> Path:
-        """Return destination path for cached thumbnail file."""
-        return self.cache_dir / f"{video_id}.jpg"
+    def get_cached_path(self, video_id: str, frame_index: int = 0) -> Path:
+        """Return destination path for a cached thumbnail frame."""
+        if frame_index <= 0:
+            return self.cache_dir / f"{video_id}.jpg"
+        return self.cache_dir / f"{video_id}-frame-{frame_index}.jpg"
 
     def extract_thumbnail(
         self,

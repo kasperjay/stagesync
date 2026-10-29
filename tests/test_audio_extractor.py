@@ -130,6 +130,29 @@ class TestAudioExtractor(unittest.TestCase):
 
         self.assertIn("FFmpeg audio extraction failed", str(ctx.exception))
 
+    @patch("subprocess.run")
+    def test_extract_clips_uses_four_evenly_spaced_windows(self, mock_run: MagicMock) -> None:
+        video_file = self.base_path / "long_clip.mp4"
+        video_file.write_bytes(b"video")
+
+        def create_out_file(*args, **kwargs):
+            Path(args[0][-1]).write_bytes(b"audio")
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = create_out_file
+
+        clips = self.extractor.extract_clips(video_file, video_duration=120.0)
+
+        self.assertEqual(len(clips), 4)
+        offsets = [call.args[0][call.args[0].index("-ss") + 1] for call in mock_run.call_args_list]
+        self.assertEqual(offsets, ["0.000", "35.000", "70.000", "105.000"])
+        self.assertEqual([clip.name for clip in clips], [
+            "long_clip.audio_clip_01.mp3",
+            "long_clip.audio_clip_02.mp3",
+            "long_clip.audio_clip_03.mp3",
+            "long_clip.audio_clip_04.mp3",
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

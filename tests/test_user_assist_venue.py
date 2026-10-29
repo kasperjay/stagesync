@@ -39,6 +39,9 @@ class TestThumbnailExtractor(unittest.TestCase):
         self.assertEqual(path.name, "test-video-id.jpg")
         self.assertEqual(path.parent, self.cache_dir)
 
+        alternate = self.extractor.get_cached_path("test-video-id", frame_index=2)
+        self.assertEqual(alternate.name, "test-video-id-frame-2.jpg")
+
     def test_nonexistent_video_raises_error(self):
         """Verify FileNotFoundError on non-existent video."""
         with self.assertRaises(FileNotFoundError):

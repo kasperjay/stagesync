@@ -36,11 +36,11 @@ from stagesync.ingestion.google_drive import (
 )
 from stagesync.ingestion.google_photos import GooglePhotosClient
 from stagesync.ingestion.metadata_parser import MetadataParser, ParsedVideoMetadata
-from stagesync.intelligence.ai_audio_judge import AIAudioJudge
+from stagesync.intelligence.ai_audio_judge import AIAudioJudge, AIAudioJudgeResult
 from stagesync.intelligence.audio_extractor import AudioExtractor
 from stagesync.intelligence.geocoder import ReverseGeocoder
 from stagesync.intelligence.setlist_fm import MatchedConcert, SetlistFmClient
-from stagesync.intelligence.shazam_matcher import ShazamMatcher
+from stagesync.intelligence.shazam_matcher import AcousticMatchResult, ShazamMatcher
 from stagesync.intelligence.spatial_correlator import (
     CorrelatedLocation,
     PhotoLocationSample,
@@ -63,6 +63,32 @@ class PipelineCoordinator:
         return (
             duration_seconds is not None
             and duration_seconds < self.settings.min_duration_seconds
+        )
+
+    @staticmethod
+    def _normalized_song_title(title: Optional[str]) -> str:
+        return "".join(char.lower() for char in (title or "") if char.isalnum())
+
+    def _setlist_song_titles(self, concert: Optional[Concert]) -> List[str]:
+        if not concert or not concert.setlist_data:
+            return []
+        titles: List[str] = []
+        for set_entry in concert.setlist_data.get("sets", {}).get("set", []):
+            for song_entry in set_entry.get("song", []):
+                title = song_entry.get("name")
+                if title:
+                    titles.append(title)
+        return titles
+
+    def _is_setlist_song(self, title: Optional[str], candidate_titles: List[str]) -> bool:
+        normalized_title = self._normalized_song_title(title)
+        if not normalized_title:
+            return False
+        return any(
+            normalized_title == self._normalized_song_title(candidate)
+            or normalized_title in self._normalized_song_title(candidate)
+            or self._normalized_song_title(candidate) in normalized_title
+            for candidate in candidate_titles
         )
 
     def __init__(
@@ -797,9 +823,9 @@ class PipelineCoordinator:
         # ---------------------------------------------------------------------
         # Step 4: Audio Extraction & Acoustic Fingerprinting
         # ---------------------------------------------------------------------
-        audio_clip_path: Optional[Path] = None
+        audio_clip_paths: List[Path] = []
         try:
-            audio_clip_path = self.audio_extractor.extract_clip(
+            audio_clip_paths = self.audio_extractor.extract_clips(
                 video_path=file_path,
                 video_duration=video.duration_seconds,
             )
@@ -816,40 +842,54 @@ class PipelineCoordinator:
         lyrics_snippet: Optional[str] = None
         raw_payload: Dict[str, Any] = {}
 
-        if audio_clip_path and audio_clip_path.exists():
-            # Tier 1: Shazamio
+        if audio_clip_paths and all(path.exists() for path in audio_clip_paths):
+            candidate_song_list = self._setlist_song_titles(matched_concert)
+            shazam_results = self.shazam_matcher.recognize_many(audio_clip_paths)
+            ranked_results = sorted(
+                enumerate(shazam_results),
+                key=lambda item: (
+                    self._is_setlist_song(item[1].song_title, candidate_song_list),
+                    item[1].confidence,
+                ),
+                reverse=True,
+            )
+            best_result = ranked_results[0][1] if ranked_results else AcousticMatchResult()
+            best_index = ranked_results[0][0] if ranked_results else 0
+            audio_clip_path = audio_clip_paths[best_index]
+
             def step_shazam():
                 nonlocal detected_song, detected_artist, detected_album, confidence, raw_payload
-                shazam_res = self.shazam_matcher.recognize(audio_clip_path)
+                shazam_res = best_result
                 if shazam_res.matched:
                     detected_song = shazam_res.song_title
                     detected_artist = shazam_res.artist
                     detected_album = shazam_res.album
                     confidence = shazam_res.confidence
-                    raw_payload = shazam_res.raw_payload
-                    return StepStatus.SUCCESS, shazam_res.model_dump(), None
+                    raw_payload = {
+                        "selected_window": best_index + 1,
+                        "windows": [
+                            {"window": index + 1, "result": result.model_dump()}
+                            for index, result in enumerate(shazam_results)
+                        ],
+                    }
+                    return StepStatus.SUCCESS, {
+                        "selected_window": best_index + 1,
+                        "windows": [
+                            {"window": index + 1, "result": result.model_dump()}
+                            for index, result in enumerate(shazam_results)
+                        ],
+                    }, None
                 return StepStatus.SKIPPED, {"message": "No Shazam match"}, None
 
             self._audit_step(video.id, PipelineStep.AUDIO_FINGERPRINT, step_shazam)
 
             # Check if Shazam match aligns with Setlist
             if matched_concert and detected_song:
-                candidate_titles = matched_concert.setlist_data.get("sets", {}).get("set", [])
-                for s in candidate_titles:
-                    for s_item in s.get("song", []):
-                        if s_item.get("name", "").lower() == detected_song.lower():
-                            setlist_verified = True
-                            confidence = max(confidence, 0.95)
-                            break
+                setlist_verified = self._is_setlist_song(detected_song, candidate_song_list)
+                if setlist_verified:
+                    confidence = max(confidence, 0.95)
 
             # Tier 2: Gemini Setlist-Constrained Audio AI (if unverified or low confidence)
-            candidate_song_list = []
-            if matched_concert and matched_concert.setlist_data:
-                for s in matched_concert.setlist_data.get("sets", {}).get("set", []):
-                    for song_entry in s.get("song", []):
-                        if song_entry.get("name"):
-                            candidate_song_list.append(song_entry.get("name"))
-
             artist_for_ai = matched_concert.headliner_artist if matched_concert else detected_artist
 
             if (not setlist_verified or confidence < 0.85) and (candidate_song_list or artist_for_ai):
@@ -1263,22 +1303,125 @@ class PipelineCoordinator:
                 concert.lineup_artists.append(artist_clean)
                 concert = self.db.save_concert(concert)
 
+        artist_setlist: Optional[MatchedConcert] = None
+        if not song_title and concert:
+            venue = self.db.get_venue(concert.venue_id) if concert.venue_id else None
+            if (
+                artist_clean.lower() != concert.headliner_artist.lower()
+                and venue
+                and venue.city
+                and concert.event_date
+            ):
+                artist_setlist = self.setlist_client.search_by_city_and_date(
+                    event_date=concert.event_date,
+                    city_name=venue.city,
+                    artist_name=artist_clean,
+                    venue_name_hint=venue.name,
+                )
+
+        candidate_songs: List[str] = []
+        setlist_source = artist_setlist.setlist_songs if artist_setlist else []
+        if setlist_source:
+            candidate_songs = [song.name for song in setlist_source if song.name]
+        elif concert:
+            for set_group in concert.setlist_data.get("sets", {}).get("set", []):
+                candidate_songs.extend(
+                    song.get("name", "")
+                    for song in set_group.get("song", [])
+                    if song.get("name")
+                )
+
+        matched_song: Optional[AcousticMatchResult] = None
+        ai_song: Optional[AIAudioJudgeResult] = None
+        shazam_is_usable = False
+        if not song_title and video.file_path and Path(video.file_path).exists():
+            try:
+                audio_clip_path = self.audio_extractor.extract_clip(
+                    video_path=video.file_path,
+                    video_duration=video.duration_seconds,
+                )
+                matched_song = self.shazam_matcher.recognize(audio_clip_path)
+                shazam_title = (matched_song.song_title or "").strip()
+                shazam_is_usable = matched_song.matched and (
+                    not candidate_songs
+                    or any(
+                        candidate.lower() == shazam_title.lower()
+                        or candidate.lower() in shazam_title.lower()
+                        for candidate in candidate_songs
+                    )
+                )
+                if not shazam_is_usable:
+                    ai_song = self.ai_audio_judge.evaluate_live_clip(
+                        audio_path=audio_clip_path,
+                        candidate_songs=candidate_songs,
+                        artist_name=artist_clean,
+                        venue_name=venue.name if venue else "Concert Venue",
+                        event_date=concert.event_date if concert else "",
+                    )
+            except Exception as e:
+                logger.warning("Song re-identification failed for %s: %s", video.id, e)
+
         # Update or create identification
         if not ident:
+            resolved_song = song_title.strip() if song_title else None
+            if not resolved_song and ai_song and ai_song.matched:
+                resolved_song = ai_song.song_title
+            if not resolved_song and matched_song and shazam_is_usable:
+                resolved_song = matched_song.song_title
+            resolved_confidence = (
+                ai_song.confidence
+                if ai_song and ai_song.matched
+                else matched_song.confidence
+                if matched_song and shazam_is_usable
+                else 0.90
+                if song_title
+                else 0.75
+            )
+            resolved_service = (
+                ai_song.service
+                if ai_song and ai_song.matched
+                else matched_song.fingerprint_service
+                if matched_song and shazam_is_usable
+                else "user_assisted_band"
+            )
             ident = Identification(
                 video_id=video.id,
                 concert_id=concert.id if concert else None,
-                detected_song_title=song_title.strip() if song_title else "Live Performance",
+                detected_song_title=resolved_song or "Live Performance",
                 detected_artist=artist_clean,
-                match_confidence=0.90 if song_title else 0.75,
-                fingerprint_service="user_assisted_band",
-                setlist_verified=bool(concert),
+                match_confidence=resolved_confidence,
+                fingerprint_service=resolved_service,
+                setlist_verified=bool(candidate_songs and ((ai_song and ai_song.matched) or shazam_is_usable)),
+                track_number_in_setlist=ai_song.setlist_index if ai_song and ai_song.matched else None,
+                identified_lyrics_snippet=ai_song.lyrics_detected if ai_song and ai_song.matched else None,
+                raw_service_payload=(
+                    ai_song.raw_payload
+                    if ai_song and ai_song.matched
+                    else matched_song.raw_payload
+                    if matched_song and shazam_is_usable
+                    else {}
+                ),
+                status="USER_ASSISTED_BAND",
             )
         else:
             ident.detected_artist = artist_clean
             if song_title and song_title.strip():
                 ident.detected_song_title = song_title.strip()
                 ident.match_confidence = max(ident.match_confidence, 0.90)
+            elif ai_song and ai_song.matched:
+                ident.detected_song_title = ai_song.song_title or ident.detected_song_title
+                ident.match_confidence = max(ident.match_confidence, ai_song.confidence)
+                ident.fingerprint_service = ai_song.service
+                ident.setlist_verified = bool(candidate_songs)
+                ident.track_number_in_setlist = ai_song.setlist_index
+                ident.identified_lyrics_snippet = ai_song.lyrics_detected
+                ident.raw_service_payload = ai_song.raw_payload
+            elif matched_song and shazam_is_usable:
+                ident.detected_song_title = matched_song.song_title or ident.detected_song_title
+                ident.match_confidence = max(ident.match_confidence, matched_song.confidence)
+                ident.fingerprint_service = matched_song.fingerprint_service
+                ident.setlist_verified = bool(candidate_songs)
+                ident.raw_service_payload = matched_song.raw_payload
             if concert:
                 ident.concert_id = concert.id
                 ident.setlist_verified = True

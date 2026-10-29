@@ -853,6 +853,9 @@ HTML_PAGE = """<!DOCTYPE html>
       <!-- Video Still Preview -->
       <div class="relative rounded-xl overflow-hidden border border-border bg-black/50 aspect-video flex items-center justify-center">
         <img id="venue-assist-thumbnail" src="" alt="Video Frame Preview" class="w-full h-full object-cover" />
+        <button type="button" id="venue-assist-refresh" onclick="refreshVideoStill('venue', this); event.stopPropagation();" class="absolute top-2 right-2 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/75 hover:bg-black/90 border border-white/15 text-[10px] font-semibold text-white transition" aria-label="Show a different video frame" title="Show a different video frame">
+          <span class="text-sm leading-none">↻</span> Different frame
+        </button>
         <div class="absolute bottom-2 left-2 right-2 flex items-center justify-between pointer-events-none">
           <span id="venue-assist-filename-tag" class="px-2 py-1 rounded bg-black/80 backdrop-blur text-[10px] font-mono text-zinc-200 border border-white/10 truncate max-w-[200px]">video.mov</span>
           <span id="venue-assist-meta-tag" class="px-2 py-1 rounded bg-black/80 backdrop-blur text-[10px] font-mono text-zinc-300 border border-white/10">00:00</span>
@@ -926,6 +929,9 @@ HTML_PAGE = """<!DOCTYPE html>
       <!-- Video Still Preview -->
       <div class="relative rounded-xl overflow-hidden border border-border bg-black/50 aspect-video flex items-center justify-center">
         <img id="band-assist-thumbnail" src="" alt="Video Frame Preview" class="w-full h-full object-cover" />
+        <button type="button" id="band-assist-refresh" onclick="refreshVideoStill('band', this); event.stopPropagation();" class="absolute top-2 right-2 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/75 hover:bg-black/90 border border-white/15 text-[10px] font-semibold text-white transition" aria-label="Show a different video frame" title="Show a different video frame">
+          <span class="text-sm leading-none">↻</span> Different frame
+        </button>
         <div class="absolute bottom-2 left-2 right-2 flex items-center justify-between pointer-events-none">
           <span id="band-assist-filename-tag" class="px-2 py-1 rounded bg-black/80 backdrop-blur text-[10px] font-mono text-zinc-200 border border-white/10 truncate max-w-[200px]">video.mov</span>
           <span id="band-assist-meta-tag" class="px-2 py-1 rounded bg-black/80 backdrop-blur text-[10px] font-mono text-zinc-300 border border-white/10">00:00</span>
@@ -1739,10 +1745,12 @@ HTML_PAGE = """<!DOCTYPE html>
 
       activeVenueAssistVideoId = id;
       selectedVenueData = null;
+      const refreshButton = document.getElementById('venue-assist-refresh');
+      if (refreshButton) refreshButton.dataset.frameIndex = '0';
 
       const thumbImg = document.getElementById('venue-assist-thumbnail');
       if (thumbImg) {
-        thumbImg.src = `/api/video/${id}/thumbnail?t=${Date.now()}`;
+        thumbImg.src = `/api/video/${id}/thumbnail?frame=0&t=${Date.now()}`;
       }
 
       document.getElementById('venue-assist-filename-tag').innerText = v.filename || 'video.mov';
@@ -1777,6 +1785,36 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('venue-assist-modal').classList.add('hidden');
       activeVenueAssistVideoId = null;
       selectedVenueData = null;
+    }
+
+    function refreshVideoStill(kind, button) {
+      const id = kind === 'venue' ? activeVenueAssistVideoId : activeBandAssistVideoId;
+      const image = document.getElementById(`${kind}-assist-thumbnail`);
+      if (!id || !image || !button || button.disabled) return;
+
+      const currentFrame = Number(button.dataset.frameIndex || '0');
+      const nextFrame = currentFrame + 1;
+      const previousSrc = image.src;
+      button.disabled = true;
+      button.classList.add('opacity-60');
+      button.querySelector('span').innerText = '…';
+
+      const nextImage = new Image();
+      nextImage.onload = () => {
+        image.src = nextImage.src;
+        button.dataset.frameIndex = String(nextFrame);
+        button.disabled = false;
+        button.classList.remove('opacity-60');
+        button.querySelector('span').innerText = '↻';
+      };
+      nextImage.onerror = () => {
+        image.src = previousSrc;
+        button.disabled = false;
+        button.classList.remove('opacity-60');
+        button.querySelector('span').innerText = '↻';
+        alert('Could not extract another frame from this video.');
+      };
+      nextImage.src = `/api/video/${id}/thumbnail?frame=${nextFrame}&t=${Date.now()}`;
     }
 
     function handleVenueSearchInput(val) {
@@ -1941,10 +1979,12 @@ HTML_PAGE = """<!DOCTYPE html>
       window._userDismissedBandModal = false;
       activeBandAssistVideoId = id;
       selectedBandName = null;
+      const refreshButton = document.getElementById('band-assist-refresh');
+      if (refreshButton) refreshButton.dataset.frameIndex = '0';
 
       const thumbImg = document.getElementById('band-assist-thumbnail');
       if (thumbImg) {
-        thumbImg.src = `/api/video/${id}/thumbnail?t=${Date.now()}`;
+        thumbImg.src = `/api/video/${id}/thumbnail?frame=0&t=${Date.now()}`;
       }
 
       document.getElementById('band-assist-filename-tag').innerText = v.filename || 'video.mov';
@@ -2531,7 +2571,12 @@ async def handle_video_thumbnail(request: web.Request) -> web.Response:
             content_type="image/svg+xml",
         )
 
-    cached_path = coordinator.thumbnail_extractor.get_cached_path(video.id)
+    try:
+        frame_index = max(0, int(request.query.get("frame", "0")))
+    except ValueError:
+        frame_index = 0
+
+    cached_path = coordinator.thumbnail_extractor.get_cached_path(video.id, frame_index)
     if cached_path.exists() and cached_path.stat().st_size > 0:
         return web.FileResponse(cached_path)
 
@@ -2540,7 +2585,7 @@ async def handle_video_thumbnail(request: web.Request) -> web.Response:
             thumb = coordinator.thumbnail_extractor.extract_thumbnail(
                 video_path=video.file_path,
                 output_path=cached_path,
-                offset_seconds=1.0,
+                offset_seconds=_thumbnail_offset(video.duration_seconds, frame_index),
             )
             return web.FileResponse(thumb)
         except Exception as e:
@@ -2550,6 +2595,17 @@ async def handle_video_thumbnail(request: web.Request) -> web.Response:
         body=ThumbnailExtractor.get_fallback_svg(),
         content_type="image/svg+xml",
     )
+
+
+def _thumbnail_offset(duration_seconds: Optional[float], frame_index: int) -> float:
+    """Pick a deterministic alternate timestamp for the requested frame."""
+    duration = max(0.0, float(duration_seconds or 0.0))
+    if frame_index <= 0 or duration <= 1.0:
+        return 1.0
+
+    positions = (0.35, 0.60, 0.80, 0.95)
+    position = positions[(frame_index - 1) % len(positions)]
+    return min(duration - 0.05, max(0.0, duration * position))
 
 
 async def handle_venue_search(request: web.Request) -> web.Response:

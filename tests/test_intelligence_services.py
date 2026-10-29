@@ -143,6 +143,18 @@ class TestIntelligenceServices(unittest.TestCase):
         self.assertFalse(parsed.matched)
         self.assertEqual(parsed.confidence, 0.0)
 
+    def test_shazam_matcher_recognize_many_preserves_input_order(self) -> None:
+        matcher = ShazamMatcher()
+        results = [
+            AcousticMatchResult(matched=True, song_title="First", confidence=0.8),
+            AcousticMatchResult(matched=True, song_title="Second", confidence=0.9),
+        ]
+        with patch.object(matcher, "recognize", side_effect=results) as recognize:
+            actual = matcher.recognize_many(["first.mp3", "second.mp3"])
+
+        self.assertEqual([result.song_title for result in actual], ["First", "Second"])
+        self.assertEqual(recognize.call_count, 2)
+
     # -------------------------------------------------------------------------
     # ReverseGeocoder Tests
     # -------------------------------------------------------------------------

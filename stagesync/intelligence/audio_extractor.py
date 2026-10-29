@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 import subprocess
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 from stagesync.security import validate_executable
 
@@ -90,3 +90,48 @@ class AudioExtractor:
             raise RuntimeError(f"Extracted audio file is empty or missing: {out_file}")
 
         return out_file
+
+    def extract_clips(
+        self,
+        video_path: Union[str, Path],
+        video_duration: Optional[float] = None,
+        duration_seconds: float = 15.0,
+        max_windows: int = 4,
+        output_prefix: Optional[Union[str, Path]] = None,
+    ) -> List[Path]:
+        """Extract evenly spaced audio windows for resilient recognition."""
+        if max_windows < 1:
+            raise ValueError("max_windows must be at least 1")
+        if duration_seconds <= 0:
+            raise ValueError("duration_seconds must be greater than zero")
+
+        source = Path(video_path).resolve()
+        if not source.exists():
+            raise FileNotFoundError(f"Video file does not exist: {source}")
+
+        if not video_duration or video_duration <= duration_seconds:
+            offsets = [0.0]
+            window_duration = min(duration_seconds, video_duration) if video_duration else duration_seconds
+        else:
+            window_duration = duration_seconds
+            latest_offset = max(0.0, video_duration - window_duration)
+            window_count = min(max_windows, max(1, int(video_duration // window_duration)))
+            if window_count == 1:
+                offsets = [latest_offset / 2.0]
+            else:
+                offsets = [latest_offset * index / (window_count - 1) for index in range(window_count)]
+
+        prefix = Path(output_prefix).resolve() if output_prefix else source.with_suffix("")
+        clips: List[Path] = []
+        for index, offset in enumerate(offsets, start=1):
+            output_path = prefix.parent / f"{prefix.name}.audio_clip_{index:02d}.mp3"
+            clips.append(
+                self.extract_clip(
+                    video_path=source,
+                    output_path=output_path,
+                    duration_seconds=window_duration,
+                    offset_seconds=offset,
+                    video_duration=video_duration,
+                )
+            )
+        return clips

@@ -1,12 +1,13 @@
 """Unit tests for StageSync Web Dashboard & REST Server."""
 
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from aiohttp.test_utils import AioHTTPTestCase
 
 from stagesync.database.models import PrivacyStatus, Video, VideoStatus
-from stagesync.web.server import create_app
+from stagesync.web.server import _thumbnail_offset, create_app
 
 
 class TestWebServer(AioHTTPTestCase):
@@ -37,6 +38,9 @@ class TestWebServer(AioHTTPTestCase):
         self.assertIn("activeStatusFilter === 'ALL') return v.processing_status !== 'REJECTED'", text)
         self.assertIn("Lineup Identification Required", text)
         self.assertIn("openBandAssistModal", text)
+        self.assertIn("venue-assist-refresh", text)
+        self.assertIn("band-assist-refresh", text)
+        self.assertIn("refreshVideoStill", text)
 
     async def test_get_status_json(self):
         """Verify /api/status returns valid system statistics."""
@@ -191,6 +195,29 @@ class TestWebServer(AioHTTPTestCase):
         text = await resp.text()
         self.assertIn("<svg", text)
         self.assertIn("Video Preview Frame", text)
+
+    async def test_video_thumbnail_uses_requested_alternate_frame(self):
+        """Verify alternate frame requests use a separate cache path and timestamp."""
+        fake_video = Video(
+            id="v_frame",
+            source_photo_id="sp_frame",
+            filename="live.mp4",
+            duration_seconds=40.0,
+            processing_status=VideoStatus.PENDING_REVIEW,
+        )
+        self.mock_db.get_video.return_value = fake_video
+        self.mock_coord.thumbnail_extractor.get_cached_path.return_value = Path("/tmp/stagesync-frame-does-not-exist.jpg")
+
+        resp = await self.client.get("/api/video/v_frame/thumbnail?frame=2")
+        self.assertEqual(resp.status, 200)
+        self.mock_coord.thumbnail_extractor.get_cached_path.assert_called_once_with("v_frame", 2)
+        self.mock_coord.thumbnail_extractor.extract_thumbnail.assert_not_called()
+
+    def test_thumbnail_offset_changes_for_alternate_frames(self):
+        """Verify alternate frame indexes map to later timestamps."""
+        self.assertEqual(_thumbnail_offset(40.0, 0), 1.0)
+        self.assertEqual(_thumbnail_offset(40.0, 1), 14.0)
+        self.assertEqual(_thumbnail_offset(40.0, 2), 24.0)
 
     async def test_venue_search_endpoint(self):
         """Verify /api/venues/search calls venue_search_engine and returns results."""
