@@ -2,6 +2,7 @@
 
 import unittest
 from pathlib import Path
+import tempfile
 from unittest.mock import MagicMock
 
 from aiohttp.test_utils import AioHTTPTestCase
@@ -213,6 +214,30 @@ class TestWebServer(AioHTTPTestCase):
         self.mock_coord.thumbnail_extractor.get_cached_path.assert_called_once_with("v_frame", 2)
         self.mock_coord.thumbnail_extractor.extract_thumbnail.assert_not_called()
 
+    async def test_video_audio_streams_cataloged_media(self):
+        """Verify the song picker can play a cataloged video's audio track."""
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as media:
+            media.write(b"media bytes")
+            media.flush()
+            fake_video = Video(
+                id="v_audio",
+                source_photo_id="sp_audio",
+                filename="concert.mp4",
+                file_path=media.name,
+                mime_type="video/mp4",
+            )
+            self.mock_db.get_video.return_value = fake_video
+            resp = await self.client.get("/api/video/v_audio/audio")
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.content_type, "video/mp4")
+            self.assertEqual(await resp.read(), b"media bytes")
+
+    async def test_video_audio_returns_not_found_without_media(self):
+        """Verify audio playback does not expose missing or arbitrary paths."""
+        self.mock_db.get_video.return_value = None
+        resp = await self.client.get("/api/video/v_missing/audio")
+        self.assertEqual(resp.status, 404)
+
     def test_thumbnail_offset_changes_for_alternate_frames(self):
         """Verify alternate frame indexes map to later timestamps."""
         self.assertEqual(_thumbnail_offset(40.0, 0), 1.0)
@@ -331,6 +356,53 @@ class TestWebServer(AioHTTPTestCase):
         data = await resp.json()
         self.assertFalse(data["success"])
         self.assertIn("Missing artist_name", data["error"])
+
+    async def test_song_options_endpoint(self):
+        """Verify song choices are returned for the manual song picker."""
+        self.mock_coord.get_song_options.return_value = {
+            "source": "setlist",
+            "songs": [{"title": "Dragon", "source": "setlist"}],
+        }
+        resp = await self.client.get("/api/video/v_100/song-options?q=Drag")
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertEqual(data["source"], "setlist")
+        self.assertEqual(data["songs"][0]["title"], "Dragon")
+        self.mock_coord.get_song_options.assert_called_once_with("v_100", "Drag")
+
+    async def test_set_video_song_endpoint(self):
+        """Verify a manually selected song is persisted through the coordinator."""
+        fake_video = Video(
+            id="v_100",
+            source_photo_id="sp_100",
+            filename="IMG_6142.MOV",
+            processing_status=VideoStatus.PENDING_REVIEW,
+        )
+        fake_ident = MagicMock()
+        fake_ident.model_dump.return_value = {"detected_song_title": "Dragon"}
+        self.mock_coord.reidentify_video_with_band.return_value = (fake_video, None, fake_ident)
+
+        resp = await self.client.post("/api/video/v_100/set-song", json={"song_title": "Dragon", "artist_name": "King Gizzard"})
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.mock_coord.reidentify_video_with_band.assert_called_once_with(
+            video_id="v_100",
+            artist_name="King Gizzard",
+            song_title="Dragon",
+        )
+
+    async def test_manual_video_match_endpoint(self):
+        """Verify the review queue can explicitly rerun matching for one video."""
+        fake_video = Video(id="v_100", source_photo_id="sp_100", filename="clip.mov")
+        self.mock_db.get_video.return_value = fake_video
+        self.mock_coord.process_video.return_value = fake_video
+
+        resp = await self.client.post("/api/video/v_100/match")
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.mock_coord.process_video.assert_called_once_with(fake_video)
 
 
 if __name__ == "__main__":

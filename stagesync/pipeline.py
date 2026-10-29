@@ -39,6 +39,7 @@ from stagesync.ingestion.metadata_parser import MetadataParser, ParsedVideoMetad
 from stagesync.intelligence.ai_audio_judge import AIAudioJudge, AIAudioJudgeResult
 from stagesync.intelligence.audio_extractor import AudioExtractor
 from stagesync.intelligence.geocoder import ReverseGeocoder
+from stagesync.intelligence.musicbrainz import MusicBrainzClient
 from stagesync.intelligence.setlist_fm import MatchedConcert, SetlistFmClient
 from stagesync.intelligence.shazam_matcher import AcousticMatchResult, ShazamMatcher
 from stagesync.intelligence.spatial_correlator import (
@@ -91,6 +92,13 @@ class PipelineCoordinator:
             for candidate in candidate_titles
         )
 
+    @staticmethod
+    def _usable_artist(artist: Optional[str]) -> str:
+        value = (artist or "").strip()
+        if value.casefold() in {"live artist", "unknown artist", "unknown"}:
+            return ""
+        return value
+
     def __init__(
         self,
         db: Optional[Database] = None,
@@ -108,6 +116,7 @@ class PipelineCoordinator:
         self.audio_extractor = AudioExtractor()
         self.geocoder = ReverseGeocoder(db=self.db)
         self.setlist_client = SetlistFmClient()
+        self.musicbrainz_client = MusicBrainzClient()
         self.shazam_matcher = ShazamMatcher()
         self.ai_audio_judge = AIAudioJudge()
         self.spatial_correlator = SpatialTemporalCorrelator()
@@ -125,6 +134,33 @@ class PipelineCoordinator:
         # Storage
         self.download_dir = (self.settings.cache_dir / "downloads").resolve()
         self.download_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_song_options(self, video_id: str, query: str = "") -> Dict[str, Any]:
+        """Return setlist songs first, then bounded discography search results."""
+        video = self.db.get_video(video_id)
+        if not video:
+            raise ValueError(f"Video {video_id} not found.")
+
+        ident = self.db.get_identification_by_video_id(video.id)
+        concert = self.db.get_concert(ident.concert_id) if ident and ident.concert_id else None
+        setlist_songs = self._setlist_song_titles(concert)
+        normalized_query = query.strip().casefold()
+        if setlist_songs:
+            songs = [
+                {"title": title, "artist": ident.detected_artist if ident else (concert.headliner_artist if concert else ""), "source": "setlist"}
+                for title in setlist_songs
+                if not normalized_query or normalized_query in title.casefold()
+            ]
+            return {"source": "setlist", "songs": songs[:50]}
+
+        artist = self._usable_artist(ident.detected_artist if ident else "") or (concert.headliner_artist if concert else "")
+        if not artist:
+            return {"source": "none", "songs": []}
+        return {
+            "source": "musicbrainz",
+            "artist": artist,
+            "songs": self.musicbrainz_client.search_recordings(artist, query),
+        }
 
     def _audit_step(
         self,

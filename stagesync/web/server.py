@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 from pathlib import Path
 from typing import Any, Dict, Optional
 import webbrowser
@@ -993,6 +994,56 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- ================================================================= -->
+  <!-- USER-ASSIST SONG SELECTION MODAL ("What song is this?")          -->
+  <!-- ================================================================= -->
+  <div id="song-assist-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-card border border-border rounded-2xl max-w-lg w-full p-6 shadow-2xl relative space-y-4 animate-in fade-in zoom-in-95 duration-150">
+      <div class="flex items-start justify-between border-b border-border pb-3">
+        <div>
+          <div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20 mb-1.5">SONG MATCHING</div>
+          <h3 class="text-lg font-bold text-white tracking-tight">What song is this?</h3>
+          <p id="song-assist-subtitle" class="text-xs text-zinc-400 mt-0.5">Choose the song StageSync could not identify.</p>
+        </div>
+        <button type="button" onclick="closeSongAssistModal()" class="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-zinc-800 transition" aria-label="Close song selection">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+      <div class="bg-card-subtle border border-border rounded-xl p-3 text-xs space-y-1">
+        <div id="song-assist-file" class="font-mono text-zinc-200 truncate">video.mov</div>
+        <div id="song-assist-artist" class="text-brand-400">Artist not selected</div>
+      </div>
+      <div class="bg-canvas border border-border rounded-xl p-3 flex items-center gap-3">
+        <button type="button" id="song-assist-play" onclick="toggleSongAssistPlayback()" class="w-10 h-10 rounded-full bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center transition shadow-md shadow-brand-500/20" aria-label="Play audio clip">
+          <span id="song-assist-play-icon" class="text-base leading-none">▶</span>
+        </button>
+        <div class="min-w-0 flex-1">
+          <div id="song-assist-play-label" class="text-xs font-semibold text-zinc-100">Listen to this clip</div>
+          <div id="song-assist-play-status" class="text-[10px] text-zinc-500 mt-0.5">Play the video audio while choosing a title.</div>
+        </div>
+        <audio id="song-assist-audio" preload="metadata" class="hidden"></audio>
+      </div>
+      <div class="space-y-2">
+        <label for="song-assist-search" class="text-xs font-semibold text-zinc-300">Search song titles</label>
+        <input type="search" id="song-assist-search" placeholder="Start typing a song title..." autocomplete="off" class="w-full bg-canvas border border-border rounded-xl px-3 py-2.5 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" oninput="searchSongOptions()" />
+        <div id="song-assist-source" class="text-[10px] text-zinc-500"></div>
+        <div id="song-options-container" class="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+          <div class="text-center py-5 text-zinc-500 text-xs">Loading song choices...</div>
+        </div>
+      </div>
+      <div id="song-selected-preview" class="hidden p-3 rounded-xl bg-brand-500/10 border border-brand-500/30 text-xs space-y-1">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-brand-400">Selected Song</div>
+        <div id="song-selected-name" class="font-bold text-white text-sm">Song title</div>
+      </div>
+      <div class="flex items-center justify-between pt-2 border-t border-border">
+        <button type="button" onclick="closeSongAssistModal()" class="px-4 py-2 text-xs font-semibold rounded-xl bg-card border border-border text-zinc-300 hover:bg-zinc-800 transition">Cancel</button>
+        <button type="button" id="btn-confirm-set-song" onclick="confirmSetSong()" disabled class="px-5 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 text-white shadow-md shadow-brand-500/20 disabled:opacity-50 disabled:pointer-events-none hover:from-brand-500 hover:to-indigo-500 transition flex items-center gap-2">
+          Confirm Song
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script>
     let activeTab = 'board';
     let activeStatusFilter = 'ALL';
@@ -1011,6 +1062,10 @@ HTML_PAGE = """<!DOCTYPE html>
       return `${s}s`;
     }
 
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+    }
+
     function isUnidentifiedSong(v) {
       if (!v) return false;
       const c = v.concert;
@@ -1025,9 +1080,26 @@ HTML_PAGE = """<!DOCTYPE html>
       const song = (ident.detected_song_title || '').trim().toLowerCase();
       const unassigned = !song || song === 'live performance' || song === 'unidentified clip' || song === 'unidentified song' || song === 'unknown' || song === 'unidentified' || song === 'instrumental' || song === 'clip';
       const lowConf = !ident.match_confidence || ident.match_confidence < 0.50;
+      const artist = (ident.detected_artist || '').trim().toLowerCase();
+      const artistUnknown = !artist || ['live artist', 'unknown artist', 'unknown'].includes(artist);
 
       const hasLineupOrHeadliner = Boolean(c.headliner_artist || (c.lineup_artists && c.lineup_artists.length > 0));
-      return (unassigned || lowConf) && hasLineupOrHeadliner;
+      return artistUnknown && (unassigned || lowConf) && hasLineupOrHeadliner;
+    }
+
+    function isSongUnmatched(v) {
+      if (!v) return false;
+      const ident = v.identification || {};
+      const song = (ident.detected_song_title || '').trim().toLowerCase();
+      const unresolved = !song || ['live performance', 'unidentified clip', 'unidentified song', 'unknown', 'unidentified', 'instrumental', 'clip'].includes(song);
+      return unresolved || !ident.match_confidence || ident.match_confidence < 0.50;
+    }
+
+    function knownArtistForVideo(v) {
+      const ident = v?.identification || {};
+      const c = v?.concert || {};
+      const artist = ident.detected_artist || c.headliner_artist || '';
+      return ['live artist', 'unknown artist', 'unknown'].includes(artist.trim().toLowerCase()) ? '' : artist;
     }
 
     function getShowBands(v) {
@@ -1039,6 +1111,156 @@ HTML_PAGE = """<!DOCTYPE html>
         list.unshift(c.headliner_artist);
       }
       return list.length > 0 ? list : (c.headliner_artist ? [c.headliner_artist] : []);
+    }
+
+    let activeSongAssistVideoId = null;
+    let selectedSongTitle = null;
+    let songSearchTimer = null;
+
+    function openSongAssistModal(id) {
+      const v = videosData.find(item => item.id === id);
+      if (!v) return;
+      const artist = knownArtistForVideo(v);
+      if (!artist) {
+        openBandAssistModal(id);
+        return;
+      }
+      activeSongAssistVideoId = id;
+      selectedSongTitle = null;
+      document.getElementById('song-assist-file').innerText = v.filename || 'video.mov';
+      document.getElementById('song-assist-artist').innerText = artist;
+      const audio = document.getElementById('song-assist-audio');
+      audio.pause();
+      audio.currentTime = 0;
+      audio.src = `/api/video/${id}/audio`;
+      document.getElementById('song-assist-play-icon').innerText = '▶';
+      document.getElementById('song-assist-play-label').innerText = 'Listen to this clip';
+      document.getElementById('song-assist-play-status').innerText = 'Play the video audio while choosing a title.';
+      document.getElementById('song-assist-search').value = '';
+      document.getElementById('song-selected-preview').classList.add('hidden');
+      document.getElementById('btn-confirm-set-song').disabled = true;
+      document.getElementById('song-options-container').innerHTML = '<div class="text-center py-5 text-zinc-500 text-xs">Loading song choices...</div>';
+      document.getElementById('song-assist-modal').classList.remove('hidden');
+      loadSongOptions('');
+    }
+
+    function closeSongAssistModal() {
+      const modal = document.getElementById('song-assist-modal');
+      if (modal) modal.classList.add('hidden');
+      const audio = document.getElementById('song-assist-audio');
+      if (audio) {
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
+      }
+      activeSongAssistVideoId = null;
+      selectedSongTitle = null;
+    }
+
+    async function toggleSongAssistPlayback() {
+      const audio = document.getElementById('song-assist-audio');
+      if (!audio) return;
+      try {
+        if (audio.paused) {
+          await audio.play();
+          document.getElementById('song-assist-play-icon').innerText = 'Ⅱ';
+          document.getElementById('song-assist-play-label').innerText = 'Playing clip';
+          document.getElementById('song-assist-play-status').innerText = 'Listen for the song, then choose its title below.';
+        } else {
+          audio.pause();
+          document.getElementById('song-assist-play-icon').innerText = '▶';
+          document.getElementById('song-assist-play-label').innerText = 'Listen to this clip';
+        }
+      } catch (err) {
+        document.getElementById('song-assist-play-status').innerText = 'Audio could not be played for this video.';
+      }
+    }
+
+    document.getElementById('song-assist-audio')?.addEventListener('ended', () => {
+      document.getElementById('song-assist-play-icon').innerText = '▶';
+      document.getElementById('song-assist-play-label').innerText = 'Listen again';
+    });
+
+    async function loadSongOptions(query) {
+      if (!activeSongAssistVideoId) return;
+      const container = document.getElementById('song-options-container');
+      if (query.length > 0 && query.length < 2) {
+        container.innerHTML = '<div class="text-center py-5 text-zinc-500 text-xs">Type at least 2 characters to search the discography.</div>';
+        return;
+      }
+      try {
+        const res = await fetch(`/api/video/${activeSongAssistVideoId}/song-options?q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        const sourceLabel = data.source === 'setlist' ? 'Show setlist' : data.source === 'musicbrainz' ? 'Band discography' : 'No song source available';
+        document.getElementById('song-assist-source').innerText = sourceLabel;
+        if (!data.songs?.length) {
+          container.innerHTML = `<div class="text-center py-5 text-zinc-500 text-xs">${data.source === 'musicbrainz' ? 'No matching titles found.' : 'No song choices found.'}</div>`;
+          return;
+        }
+        container.innerHTML = data.songs.map((song) => {
+          const encodedTitle = encodeURIComponent(song.title).replace(/'/g, '%27');
+          return `
+          <button type="button" onclick="selectSongOption(decodeURIComponent('${encodedTitle}'))" class="w-full text-left p-2.5 rounded-xl bg-card-subtle hover:bg-card-hover border border-border hover:border-brand-500/50 cursor-pointer transition flex items-center justify-between gap-3 group">
+            <span class="font-semibold text-xs text-zinc-100 group-hover:text-brand-300">${escapeHtml(song.title)}</span>
+            <span class="text-[10px] text-zinc-500">Select</span>
+          </button>
+        `;
+        }).join('');
+      } catch (err) {
+        container.innerHTML = '<div class="text-center py-5 text-rose-300 text-xs">Could not load song choices.</div>';
+      }
+    }
+
+    function searchSongOptions() {
+      clearTimeout(songSearchTimer);
+      const query = document.getElementById('song-assist-search').value.trim();
+      songSearchTimer = setTimeout(() => loadSongOptions(query), 250);
+    }
+
+    function selectSongOption(title) {
+      selectedSongTitle = title;
+      document.getElementById('song-selected-name').innerText = title;
+      document.getElementById('song-selected-preview').classList.remove('hidden');
+      document.getElementById('btn-confirm-set-song').disabled = false;
+    }
+
+    async function confirmSetSong() {
+      if (!activeSongAssistVideoId || !selectedSongTitle) return;
+      const btn = document.getElementById('btn-confirm-set-song');
+      btn.disabled = true;
+      btn.innerText = 'Saving...';
+      try {
+        const res = await fetch(`/api/video/${activeSongAssistVideoId}/set-song`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ song_title: selectedSongTitle, artist_name: knownArtistForVideo(videosData.find(item => item.id === activeSongAssistVideoId)) })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Server error');
+        const id = activeSongAssistVideoId;
+        closeSongAssistModal();
+        await loadData();
+        openDrawer(id);
+      } catch (err) {
+        alert('Failed to save song: ' + err.message);
+      } finally {
+        btn.innerText = 'Confirm Song';
+        btn.disabled = !selectedSongTitle;
+      }
+    }
+
+    async function triggerSongMatching(id, button) {
+      if (button) { button.disabled = true; button.innerText = 'Matching...'; }
+      try {
+        const res = await fetch(`/api/video/${id}/match`, { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Server error');
+        await loadData();
+      } catch (err) {
+        alert('Song matching failed: ' + err.message);
+      } finally {
+        if (button) { button.disabled = false; button.innerText = 'Try Matching Again'; }
+      }
     }
 
     function checkAutoPromptBandModal() {
@@ -1385,6 +1607,7 @@ HTML_PAGE = """<!DOCTYPE html>
         const venue = v.venue ? `${v.venue.name}, ${v.venue.city}` : 'Unknown Venue';
         const date = c.event_date || (v.recorded_at_utc ? v.recorded_at_utc.substring(0, 10) : 'Unknown Date');
         const needsBandAssist = isUnidentifiedSong(v);
+        const songUnmatched = isSongUnmatched(v);
         const showBands = needsBandAssist ? getShowBands(v) : [];
 
         return `
@@ -1427,6 +1650,9 @@ HTML_PAGE = """<!DOCTYPE html>
                     </button>
                   </div>
                   <div class="flex items-center gap-2">
+                    ${songUnmatched ? `
+                      <span class="text-xs px-2.5 py-1 rounded-lg bg-rose-500/10 text-rose-300 border border-rose-500/30 font-semibold">Song not identified</span>
+                    ` : ''}
                     <span class="text-xs px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-semibold">
                       ${conf}% Match
                     </span>
@@ -1478,6 +1704,18 @@ HTML_PAGE = """<!DOCTYPE html>
                       `).join('') : `
                         <button type="button" onclick="openBandAssistModal('${v.id}')" class="text-xs text-amber-400 underline">Enter opener / performer name</button>
                       `}
+                    </div>
+                  </div>
+                ` : ''}
+                ${songUnmatched ? `
+                  <div class="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div>
+                      <div class="text-xs font-bold text-rose-300">StageSync could not identify this song.</div>
+                      <div class="text-[11px] text-zinc-400 mt-0.5">Try the matcher again or choose the title manually.</div>
+                    </div>
+                    <div class="flex items-center gap-2 flex-shrink-0">
+                      <button type="button" onclick="triggerSongMatching('${v.id}', this)" class="px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-[11px] font-semibold transition">Try Matching Again</button>
+                      ${knownArtistForVideo(v) ? `<button type="button" onclick="openSongAssistModal('${v.id}')" class="px-2.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-[11px] font-semibold transition">What song is this?</button>` : ''}
                     </div>
                   </div>
                 ` : ''}
@@ -2338,6 +2576,7 @@ HTML_PAGE = """<!DOCTYPE html>
         closeScanModal();
         closeVenueAssistModal();
         closeBandAssistModal();
+        closeSongAssistModal();
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
@@ -2373,11 +2612,15 @@ def create_app(
     app.router.add_get("/api/videos", handle_list_videos)
     app.router.add_get("/api/video/{id}", handle_get_video)
     app.router.add_get("/api/video/{id}/thumbnail", handle_video_thumbnail)
+    app.router.add_get("/api/video/{id}/audio", handle_video_audio)
+    app.router.add_get("/api/video/{id}/song-options", handle_song_options)
     app.router.add_get("/api/venues/search", handle_venue_search)
     app.router.add_post("/api/video/{id}/approve", handle_approve_video)
     app.router.add_post("/api/video/{id}/reject", handle_reject_video)
     app.router.add_post("/api/video/{id}/set-venue", handle_set_video_venue)
     app.router.add_post("/api/video/{id}/set-band", handle_set_video_band)
+    app.router.add_post("/api/video/{id}/set-song", handle_set_video_song)
+    app.router.add_post("/api/video/{id}/match", handle_trigger_video_match)
     app.router.add_post("/api/scan", handle_trigger_scan)
     app.router.add_post("/api/picker/create", handle_picker_create)
     app.router.add_post("/api/picker/poll", handle_picker_poll)
@@ -2597,6 +2840,27 @@ async def handle_video_thumbnail(request: web.Request) -> web.Response:
     )
 
 
+async def handle_video_audio(request: web.Request) -> web.Response:
+    """Stream the original video container so the browser can play its audio track."""
+    db: Database = request.app[DB_KEY]
+    video = db.get_video(request.match_info["id"])
+    if not video or not video.file_path:
+        return web.json_response({"error": "Video file not available"}, status=404)
+
+    media_path = Path(video.file_path)
+    if not media_path.exists() or not media_path.is_file():
+        return web.json_response({"error": "Video file not available"}, status=404)
+
+    content_type = video.mime_type or mimetypes.guess_type(media_path.name)[0] or "application/octet-stream"
+    return web.FileResponse(
+        media_path,
+        headers={
+            "Content-Type": content_type,
+            "Content-Disposition": "inline",
+        },
+    )
+
+
 def _thumbnail_offset(duration_seconds: Optional[float], frame_index: int) -> float:
     """Pick a deterministic alternate timestamp for the requested frame."""
     duration = max(0.0, float(duration_seconds or 0.0))
@@ -2698,6 +2962,73 @@ async def handle_set_video_band(request: web.Request) -> web.Response:
     except Exception as e:
         logger.exception("Failed to set band for video %s: %s", video_id, e)
         return web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+async def handle_song_options(request: web.Request) -> web.Response:
+    """Return setlist choices or discography search choices for manual matching."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    video_id = request.match_info["id"]
+    query = request.query.get("q", "")
+    try:
+        return web.json_response(coordinator.get_song_options(video_id, query))
+    except ValueError as exc:
+        return web.json_response({"error": str(exc), "songs": []}, status=404)
+    except Exception as exc:
+        logger.exception("Song option search failed for video %s: %s", video_id, exc)
+        return web.json_response({"error": str(exc), "songs": []}, status=500)
+
+
+async def handle_set_video_song(request: web.Request) -> web.Response:
+    """Save the user's selected song title using the existing band re-identification path."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    video_id = request.match_info["id"]
+    body = await request.json() if request.can_read_body else {}
+    song_title = (body.get("song_title") or "").strip()
+    artist_name = (body.get("artist_name") or "").strip()
+    if not song_title:
+        return web.json_response({"success": False, "error": "Missing song_title"}, status=400)
+
+    if not artist_name:
+        video = request.app[DB_KEY].get_video(video_id)
+        ident = request.app[DB_KEY].get_identification_by_video_id(video_id) if video else None
+        concert = request.app[DB_KEY].get_concert(ident.concert_id) if ident and ident.concert_id else None
+        candidate_artist = (ident.detected_artist if ident else "").strip()
+        if candidate_artist.casefold() in {"live artist", "unknown artist", "unknown"}:
+            candidate_artist = ""
+        artist_name = candidate_artist or (concert.headliner_artist if concert else "")
+    if not artist_name:
+        return web.json_response({"success": False, "error": "Select the performing band first"}, status=400)
+
+    try:
+        video, concert, ident = coordinator.reidentify_video_with_band(
+            video_id=video_id,
+            artist_name=artist_name,
+            song_title=song_title,
+        )
+        return web.json_response({
+            "success": True,
+            "video": serialize_model(video),
+            "concert": serialize_model(concert),
+            "identification": serialize_model(ident),
+        })
+    except Exception as exc:
+        logger.exception("Failed to set song for video %s: %s", video_id, exc)
+        return web.json_response({"success": False, "error": str(exc)}, status=500)
+
+
+async def handle_trigger_video_match(request: web.Request) -> web.Response:
+    """Re-run the existing local audio matching pipeline for one video."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    video_id = request.match_info["id"]
+    video = request.app[DB_KEY].get_video(video_id)
+    if not video:
+        return web.json_response({"success": False, "error": "Video not found"}, status=404)
+    try:
+        updated = coordinator.process_video(video)
+        return web.json_response({"success": True, "video": serialize_model(updated)})
+    except Exception as exc:
+        logger.exception("Manual song matching failed for video %s", video_id)
+        return web.json_response({"success": False, "error": str(exc)}, status=500)
 
 
 async def handle_trigger_scan(request: web.Request) -> web.Response:
