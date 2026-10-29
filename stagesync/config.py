@@ -175,6 +175,9 @@ class Settings(BaseModel):
     max_daily_uploads: int = Field(
         default_factory=lambda: int(os.getenv("STAGESYNC_MAX_DAILY_UPLOADS", "5"))
     )
+    min_duration_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("STAGESYNC_MIN_DURATION_SECONDS", "8.0"))
+    )
 
     @property
     def database_path(self) -> Path:

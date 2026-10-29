@@ -917,7 +917,7 @@ HTML_PAGE = """<!DOCTYPE html>
           <h3 class="text-lg font-bold text-white tracking-tight">Which band is this?</h3>
           <p id="band-assist-subtitle" class="text-xs text-zinc-400 mt-0.5">Select from the artists who performed at this show.</p>
         </div>
-        <button onclick="closeBandAssistModal()" class="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-zinc-800 transition">
+        <button onclick="closeBandAssistModal(true)" class="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-zinc-800 transition">
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
@@ -1007,11 +1007,20 @@ HTML_PAGE = """<!DOCTYPE html>
     function isUnidentifiedSong(v) {
       if (!v) return false;
       const c = v.concert;
-      if (!c || !c.headliner_artist) return false;
+      if (!c) return false;
       const ident = v.identification || {};
+
+      // If user has already selected the band for this video, do not re-prompt
+      if (ident.status === 'USER_ASSISTED_BAND' || ident.fingerprint_service === 'user_assisted_band') {
+        return false;
+      }
+
       const song = (ident.detected_song_title || '').trim().toLowerCase();
-      const unassigned = !song || song === 'live performance' || song === 'unidentified clip' || song === 'unidentified song' || song === 'unknown';
-      return unassigned || !ident.match_confidence || ident.match_confidence < 0.50;
+      const unassigned = !song || song === 'live performance' || song === 'unidentified clip' || song === 'unidentified song' || song === 'unknown' || song === 'unidentified' || song === 'instrumental' || song === 'clip';
+      const lowConf = !ident.match_confidence || ident.match_confidence < 0.50;
+
+      const hasLineupOrHeadliner = Boolean(c.headliner_artist || (c.lineup_artists && c.lineup_artists.length > 0));
+      return (unassigned || lowConf) && hasLineupOrHeadliner;
     }
 
     function getShowBands(v) {
@@ -1023,6 +1032,19 @@ HTML_PAGE = """<!DOCTYPE html>
         list.unshift(c.headliner_artist);
       }
       return list.length > 0 ? list : (c.headliner_artist ? [c.headliner_artist] : []);
+    }
+
+    function checkAutoPromptBandModal() {
+      if (activeTab !== 'review') return;
+      if (window._userDismissedBandModal) return;
+      const modal = document.getElementById('band-assist-modal');
+      if (modal && !modal.classList.contains('hidden')) return;
+      const pending = (videosData || []).filter(v => v.processing_status === 'PENDING_REVIEW');
+      const firstNeeding = pending.find(v => isUnidentifiedSong(v));
+      if (firstNeeding) {
+        console.log('[StageSync] Auto-prompting band selection modal for video:', firstNeeding.id, firstNeeding.filename);
+        openBandAssistModal(firstNeeding.id);
+      }
     }
 
     async function loadData() {
@@ -1074,15 +1096,8 @@ HTML_PAGE = """<!DOCTYPE html>
 
         renderCurrentView();
 
-        if (activeTab === 'review' && !window._autoPromptedBandReviewModal) {
-          window._autoPromptedBandReviewModal = true;
-          setTimeout(() => {
-            const pending = getFilteredVideos().filter(v => v.processing_status === 'PENDING_REVIEW');
-            const firstNeeding = pending.find(v => isUnidentifiedSong(v));
-            if (firstNeeding) {
-              openBandAssistModal(firstNeeding.id);
-            }
-          }, 350);
+        if (activeTab === 'review') {
+          setTimeout(checkAutoPromptBandModal, 150);
         }
       } catch (err) {
         console.error('Failed to load status', err);
@@ -1108,7 +1123,11 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     function setTab(tab) {
+      const enteringReview = tab === 'review' && activeTab !== 'review';
       activeTab = tab;
+      if (enteringReview) {
+        window._userDismissedBandModal = false;
+      }
       const views = ['board', 'review', 'catalog', 'overview'];
       const viewNames = {
         'board': 'Kanban Board',
@@ -1138,15 +1157,8 @@ HTML_PAGE = """<!DOCTYPE html>
 
       renderCurrentView();
 
-      if (tab === 'review' && !window._autoPromptedBandReviewModal) {
-        window._autoPromptedBandReviewModal = true;
-        setTimeout(() => {
-          const pending = getFilteredVideos().filter(v => v.processing_status === 'PENDING_REVIEW');
-          const firstNeeding = pending.find(v => isUnidentifiedSong(v));
-          if (firstNeeding) {
-            openBandAssistModal(firstNeeding.id);
-          }
-        }, 300);
+      if (tab === 'review') {
+        setTimeout(checkAutoPromptBandModal, 150);
       }
     }
 
@@ -1445,18 +1457,20 @@ HTML_PAGE = """<!DOCTYPE html>
                         <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
                         Which band is this? (Concert Matched • Song Unconfirmed)
                       </span>
-                      <button type="button" onclick="openBandAssistModal('${v.id}')" class="px-2.5 py-1 text-xs text-black font-bold bg-amber-400 hover:bg-amber-300 rounded-lg shadow-sm flex items-center gap-1 transition">
+                      <button type="button" onclick="openBandAssistModal('${v.id}')" class="px-2.5 py-1 text-xs text-black font-bold bg-amber-400 hover:bg-amber-300 rounded-lg shadow-sm flex items-center gap-1 transition cursor-pointer">
                         <span>🎸 Open Pop-up Selector</span>
                         <span>→</span>
                       </button>
                     </div>
                     <div class="flex flex-wrap gap-1.5 items-center">
                       <span class="text-[11px] text-zinc-400 mr-1">Select lineup artist:</span>
-                      ${showBands.map(b => `
-                        <button type="button" onclick="quickSetBand('${v.id}', '${b.replace(/'/g, "\\'")}')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-zinc-800 hover:bg-amber-500 hover:text-black text-zinc-200 border border-zinc-700 transition">
+                      ${showBands.length > 0 ? showBands.map(b => `
+                        <button type="button" onclick="quickSetBand('${v.id}', '${b.replace(/'/g, "\\'")}')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-zinc-800 hover:bg-amber-500 hover:text-black text-zinc-200 border border-zinc-700 transition cursor-pointer">
                           ${b}
                         </button>
-                      `).join('')}
+                      `).join('') : `
+                        <button type="button" onclick="openBandAssistModal('${v.id}')" class="text-xs text-amber-400 underline">Enter opener / performer name</button>
+                      `}
                     </div>
                   </div>
                 ` : ''}
@@ -1923,6 +1937,7 @@ HTML_PAGE = """<!DOCTYPE html>
       const v = videosData.find(item => item.id === id);
       if (!v) return;
 
+      window._userDismissedBandModal = false;
       activeBandAssistVideoId = id;
       selectedBandName = null;
 
@@ -1989,10 +2004,14 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('band-assist-modal').classList.remove('hidden');
     }
 
-    function closeBandAssistModal() {
-      document.getElementById('band-assist-modal').classList.add('hidden');
+    function closeBandAssistModal(manualDismiss = false) {
+      const modal = document.getElementById('band-assist-modal');
+      if (modal) modal.classList.add('hidden');
       activeBandAssistVideoId = null;
       selectedBandName = null;
+      if (manualDismiss) {
+        window._userDismissedBandModal = true;
+      }
     }
 
     function selectBandOption(bandName, optIdx) {
@@ -2329,7 +2348,15 @@ def create_app(
 
 async def handle_index(request: web.Request) -> web.Response:
     """Serve the single-page dashboard HTML."""
-    return web.Response(text=HTML_PAGE, content_type="text/html")
+    return web.Response(
+        text=HTML_PAGE,
+        content_type="text/html",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 async def handle_get_status(request: web.Request) -> web.Response:

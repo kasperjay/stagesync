@@ -58,6 +58,13 @@ logger = logging.getLogger(__name__)
 class PipelineCoordinator:
     """Master pipeline orchestrator for StageSync."""
 
+    def _is_short_clip(self, duration_seconds: Optional[float]) -> bool:
+        """Return whether a clip is below the configured archival threshold."""
+        return (
+            duration_seconds is not None
+            and duration_seconds < self.settings.min_duration_seconds
+        )
+
     def __init__(
         self,
         db: Optional[Database] = None,
@@ -181,12 +188,32 @@ class PipelineCoordinator:
             base_url = item.get("baseUrl")
             metadata_raw = item.get("mediaMetadata", {})
 
+            # Pre-filter: Skip Live Photos and short clips using the API-provided duration.
+            # Google Photos mediaMetadata.video.duration is in seconds (string or numeric).
+            video_meta_raw = metadata_raw.get("video", {})
+            raw_duration = video_meta_raw.get("duration")
+            api_duration_sec: Optional[float] = None
+            if raw_duration is not None:
+                try:
+                    api_duration_sec = float(raw_duration)
+                except (ValueError, TypeError):
+                    pass
+            if api_duration_sec is not None and api_duration_sec < self.settings.min_duration_seconds:
+                logger.debug(
+                    "Skipping short video/Live Photo %s (%.1fs < %.1fs)",
+                    clean_filename,
+                    api_duration_sec,
+                    self.settings.min_duration_seconds,
+                )
+                continue
+
             video = Video(
                 source_photo_id=media_id,
                 filename=clean_filename,
                 mime_type=item.get("mimeType", "video/mp4"),
                 width=int(metadata_raw.get("width", 0)) or None,
                 height=int(metadata_raw.get("height", 0)) or None,
+                duration_seconds=api_duration_sec,
                 processing_status=VideoStatus.DISCOVERED,
             )
 
@@ -239,12 +266,32 @@ class PipelineCoordinator:
             base_url = item.get("baseUrl")
             metadata_raw = item.get("mediaMetadata", {})
 
+            # Pre-filter: Skip Live Photos and short clips using the API-provided duration.
+            # Google Photos mediaMetadata.video.duration is in seconds (string or numeric).
+            video_meta_raw = metadata_raw.get("video", {})
+            raw_duration = video_meta_raw.get("duration")
+            api_duration_sec: Optional[float] = None
+            if raw_duration is not None:
+                try:
+                    api_duration_sec = float(raw_duration)
+                except (ValueError, TypeError):
+                    pass
+            if api_duration_sec is not None and api_duration_sec < self.settings.min_duration_seconds:
+                logger.debug(
+                    "Skipping short picker video/Live Photo %s (%.1fs < %.1fs)",
+                    clean_filename,
+                    api_duration_sec,
+                    self.settings.min_duration_seconds,
+                )
+                continue
+
             video = Video(
                 source_photo_id=media_id,
                 filename=clean_filename,
                 mime_type=item.get("mimeType", "video/mp4"),
                 width=int(metadata_raw.get("width", 0)) or None,
                 height=int(metadata_raw.get("height", 0)) or None,
+                duration_seconds=api_duration_sec,
                 processing_status=VideoStatus.DISCOVERED,
             )
 
@@ -358,6 +405,16 @@ class PipelineCoordinator:
                 duration_ms = float(video_meta.get("durationMillis", 0)) or 0.0
                 duration_sec = duration_ms / 1000.0 if duration_ms > 0 else None
 
+                # Pre-filter: Skip Live Photos and short clips (< min_duration_seconds)
+                if duration_sec is not None and duration_sec < self.settings.min_duration_seconds:
+                    logger.debug(
+                        "Skipping short video/Live Photo %s (%.1fs < %.1fs)",
+                        clean_filename,
+                        duration_sec,
+                        self.settings.min_duration_seconds,
+                    )
+                    continue
+
                 lat = float(loc.get("latitude")) if loc.get("latitude") is not None else None
                 lng = float(loc.get("longitude")) if loc.get("longitude") is not None else None
 
@@ -459,6 +516,15 @@ class PipelineCoordinator:
                     if parsed_meta.recorded_at_utc:
                         v.recorded_at_utc = parsed_meta.recorded_at_utc
 
+                if self._is_short_clip(v.duration_seconds):
+                    logger.debug(
+                        "Skipping short local video/Live Photo %s (%.1fs < %.1fs)",
+                        v.filename,
+                        v.duration_seconds,
+                        self.settings.min_duration_seconds,
+                    )
+                    continue
+
                 # Correlate GPS from neighbor photos if video lacks coordinates
                 if (v.latitude is None or v.longitude is None) and local_photo_samples:
                     corr = self.spatial_correlator.correlate_video_location(
@@ -486,6 +552,17 @@ class PipelineCoordinator:
     def process_video(self, video: Video) -> Video:
         """Execute end-to-end intelligence pipeline on a single video entity."""
         logger.info("Starting processing pipeline for video %s (%s)", video.id, video.filename)
+
+        if self._is_short_clip(video.duration_seconds):
+            logger.info(
+                "Rejecting short video/Live Photo %s (%.1fs < %.1fs)",
+                video.filename,
+                video.duration_seconds,
+                self.settings.min_duration_seconds,
+            )
+            video.processing_status = VideoStatus.REJECTED
+            self.db.save_video(video)
+            return video
 
         if not video.file_path or not Path(video.file_path).exists():
             # If candidate was cataloged from Google Drive during dry-run, download binary on-demand
@@ -822,9 +899,12 @@ class PipelineCoordinator:
         # ---------------------------------------------------------------------
         # Step 6: Advance Processing Status
         # ---------------------------------------------------------------------
-        if confidence >= self.settings.auto_approve_threshold:
+        dur = video.duration_seconds or 0.0
+        if dur < self.settings.min_duration_seconds:
+            video.processing_status = VideoStatus.REJECTED
+        elif confidence >= self.settings.auto_approve_threshold and video.is_concert_candidate:
             video.processing_status = VideoStatus.APPROVED
-        elif confidence >= 0.50 or (matched_concert and video.is_concert_candidate):
+        elif (confidence >= 0.50 or matched_concert) and video.is_concert_candidate:
             video.processing_status = VideoStatus.PENDING_REVIEW
         elif video.is_concert_candidate:
             video.processing_status = VideoStatus.PENDING_REVIEW
@@ -904,6 +984,10 @@ class PipelineCoordinator:
 
         processed = []
         for v in candidates:
+            if self._is_short_clip(v.duration_seconds):
+                v.processing_status = VideoStatus.REJECTED
+                self.db.save_video(v)
+                continue
             res = self.process_video(v)
             processed.append(res)
         return processed
@@ -964,6 +1048,35 @@ class PipelineCoordinator:
         video.processing_status = VideoStatus.REJECTED
         self.db.save_video(video)
         return video
+
+    def purge_rejected_videos(
+        self,
+        max_duration: Optional[float] = None,
+        only_rejected: bool = False,
+        delete_disk_files: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Purge rejected and sub-duration Live Photos from catalog and disk cache."""
+        threshold = max_duration if max_duration is not None else self.settings.min_duration_seconds
+        purged = self.db.purge_rejected_videos(max_duration=threshold, only_rejected=only_rejected)
+        if delete_disk_files:
+            for item in purged:
+                file_path = item.get("file_path")
+                if file_path:
+                    try:
+                        p = Path(file_path)
+                        if p.exists():
+                            p.unlink()
+                    except OSError as err:
+                        logger.warning("Could not delete video file %s: %s", file_path, err)
+                vid_id = item.get("id")
+                # Also remove any audio clip in download cache
+                for audio_cand in self.download_dir.glob(f"{vid_id}*"):
+                    try:
+                        if audio_cand.is_file():
+                            audio_cand.unlink()
+                    except OSError:
+                        pass
+        return purged
 
     def reidentify_video_with_venue(
         self,

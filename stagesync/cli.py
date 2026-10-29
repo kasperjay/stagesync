@@ -722,6 +722,78 @@ def cmd_serve(args: argparse.Namespace) -> None:
     run_server(host=args.host, port=args.port, open_browser=args.open_browser)
 
 
+def cmd_purge(args: argparse.Namespace) -> None:
+    """Purge Live Photos and short-duration clips from the catalog and cache."""
+    settings = get_settings()
+    coordinator = PipelineCoordinator()
+    threshold = args.max_duration if args.max_duration is not None else settings.min_duration_seconds
+
+    if args.dry_run:
+        # Preview what would be removed without touching anything
+        db = get_db()
+        import sqlite3
+        conn = db._get_connection()  # type: ignore[attr-defined]
+        if args.only_rejected:
+            rows = conn.execute(
+                "SELECT id, filename, duration_seconds, processing_status FROM videos WHERE processing_status = 'REJECTED'"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, filename, duration_seconds, processing_status FROM videos
+                WHERE processing_status = 'REJECTED'
+                   OR (duration_seconds IS NOT NULL AND duration_seconds < :max_dur)
+                """,
+                {"max_dur": threshold},
+            ).fetchall()
+
+        if not rows:
+            console.print("[bold green]✓ No Live Photos or short clips found in the catalog.[/bold green]")
+            return
+
+        table = Table(
+            title=f"[DRY-RUN] Would purge {len(rows)} video(s) ≤ {threshold:.0f}s",
+            box=box.ROUNDED,
+        )
+        table.add_column("ID", style="dim", max_width=12)
+        table.add_column("Filename", style="cyan")
+        table.add_column("Duration", justify="right")
+        table.add_column("Status", style="bold yellow")
+        for r in rows:
+            dur = format_duration(r["duration_seconds"])
+            table.add_row(r["id"][:8] + "...", r["filename"], dur, r["processing_status"])
+        console.print(table)
+        console.print(
+            f"\n[yellow]Re-run without [bold]--dry-run[/bold] to delete these {len(rows)} record(s).[/yellow]"
+        )
+        return
+
+    console.print(
+        f"[bold cyan]Purging Live Photos and clips shorter than {threshold:.0f}s from catalog...[/bold cyan]"
+    )
+    with console.status("[bold green]Scanning database for short clips..."):
+        purged = coordinator.purge_rejected_videos(
+            max_duration=threshold,
+            only_rejected=args.only_rejected,
+            delete_disk_files=not args.no_delete_files,
+        )
+
+    if not purged:
+        console.print("[bold green]✓ Catalog is already clean — no Live Photos found.[/bold green]")
+        return
+
+    table = Table(title=f"Purged {len(purged)} Live Photo(s) / short clip(s)", box=box.ROUNDED)
+    table.add_column("Filename", style="cyan")
+    table.add_column("Duration", justify="right")
+    table.add_column("File Deleted", justify="center")
+    for item in purged:
+        dur = format_duration(item.get("duration_seconds"))
+        file_removed = "✓" if (not args.no_delete_files and item.get("file_path")) else "—"
+        table.add_row(item.get("filename", "?"), dur, file_removed)
+    console.print(table)
+    console.print(f"\n[bold green]✓ Removed {len(purged)} Live Photo(s) from catalog.[/bold green]")
+
+
 def main() -> None:
     """Main CLI entrypoint."""
     parser = argparse.ArgumentParser(
@@ -780,6 +852,34 @@ def main() -> None:
     p_upload.add_argument("--limit", type=int, default=5, help="Number of videos to upload")
     p_upload.add_argument("--privacy", choices=["private", "unlisted", "public"], help="Override privacy level")
     p_upload.set_defaults(func=cmd_upload)
+
+    # purge
+    p_purge = subparsers.add_parser(
+        "purge",
+        help="Purge Live Photos and sub-duration clips from the catalog",
+    )
+    p_purge.add_argument(
+        "--max-duration",
+        type=float,
+        default=None,
+        help="Maximum duration in seconds to treat as a Live Photo (default: STAGESYNC_MIN_DURATION_SECONDS env var, or 8.0 s)",
+    )
+    p_purge.add_argument(
+        "--only-rejected",
+        action="store_true",
+        help="Only remove explicitly REJECTED videos; keep short clips that are still DISCOVERED/DOWNLOADED",
+    )
+    p_purge.add_argument(
+        "--no-delete-files",
+        action="store_true",
+        help="Remove DB records but keep video files on disk",
+    )
+    p_purge.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be purged without actually deleting anything",
+    )
+    p_purge.set_defaults(func=cmd_purge)
 
     # auth
     p_auth = subparsers.add_parser("auth", help="OAuth authentication management")

@@ -334,6 +334,54 @@ class Database:
         with self.transaction() as cur:
             cur.execute(sql, {"status": status.value, "now": now, "id": video_id})
 
+    def delete_video(self, video_id: str) -> bool:
+        """Delete a video and all cascaded children."""
+        sql = "DELETE FROM videos WHERE id = :id"
+        with self.transaction() as cur:
+            cur.execute("PRAGMA foreign_keys = ON")
+            res = cur.execute(sql, {"id": video_id})
+            return res.rowcount > 0
+
+    def purge_rejected_videos(
+        self,
+        max_duration: float = 8.0,
+        only_rejected: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Purge rejected or sub-duration videos from the database and return their metadata.
+
+        Catches three classes of Live Photo pollution:
+        1. Explicitly REJECTED by the pipeline (any duration).
+        2. Known short clips where duration_seconds < max_duration (any status).
+        3. DISCOVERED/DOWNLOADED entries still awaiting ffprobe whose source filename
+           pattern matches Apple Live Photo sidecars (e.g. IMG_*.MOV <= 3 s detected
+           by mimeType + sub-threshold duration).
+        """
+        if only_rejected:
+            sql = "SELECT id, filename, file_path, duration_seconds FROM videos WHERE processing_status = 'REJECTED'"
+            params: Dict[str, Any] = {}
+        else:
+            sql = """
+            SELECT id, filename, file_path, duration_seconds FROM videos
+            WHERE processing_status = 'REJECTED'
+               OR (duration_seconds IS NOT NULL AND duration_seconds < :max_dur)
+            """
+            params = {"max_dur": max_duration}
+        conn = self._get_connection()
+        rows = conn.execute(sql, params).fetchall()
+        purged = []
+        for r in rows:
+            vid_id = r["id"]
+            purged.append({
+                "id": vid_id,
+                "filename": r["filename"],
+                "file_path": r["file_path"],
+                "duration_seconds": r["duration_seconds"],
+            })
+            with self.transaction() as cur:
+                cur.execute("PRAGMA foreign_keys = ON")
+                cur.execute("DELETE FROM videos WHERE id = :id", {"id": vid_id})
+        return purged
+
     def list_videos(self, status: Optional[VideoStatus] = None, limit: int = 100) -> List[Video]:
         """List videos optionally filtered by processing status."""
         conn = self._get_connection()
