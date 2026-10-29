@@ -1273,6 +1273,14 @@ HTML_PAGE = """<!DOCTYPE html>
       if (firstNeeding) {
         console.log('[StageSync] Auto-prompting band selection modal for video:', firstNeeding.id, firstNeeding.filename);
         openBandAssistModal(firstNeeding.id);
+        return;
+      }
+      const songModal = document.getElementById('song-assist-modal');
+      if (songModal && !songModal.classList.contains('hidden')) return;
+      const firstSongNeeding = pending.find(v => isSongUnmatched(v) && knownArtistForVideo(v));
+      if (firstSongNeeding) {
+        console.log('[StageSync] Auto-prompting song selection modal for video:', firstSongNeeding.id, firstSongNeeding.filename);
+        openSongAssistModal(firstSongNeeding.id);
       }
     }
 
@@ -1539,6 +1547,10 @@ HTML_PAGE = """<!DOCTYPE html>
                   <button type="button" onclick="quickApprove('${v.id}')" class="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-brand-600 hover:bg-brand-500 text-white transition">
                     Approve ✓
                   </button>
+                ` : songUnmatched && knownArtistForVideo(v) ? `
+                  <button onclick="openSongAssistModal('${v.id}')" class="text-xs text-rose-300 hover:text-white font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 transition">
+                    <span>What song is this?</span>
+                  </button>
                 ` : `
                   <button type="button" onclick="openDrawer('${v.id}')" class="text-[10px] text-zinc-400 hover:text-white transition px-1">Inspect →</button>
                 `}
@@ -1615,13 +1627,17 @@ HTML_PAGE = """<!DOCTYPE html>
             <div class="flex flex-col md:flex-row gap-4">
               
               <!-- Video Still Preview -->
-              <div class="w-full md:w-44 h-28 rounded-xl overflow-hidden border border-border bg-black/40 flex-shrink-0 relative group cursor-pointer" onclick="${needsBandAssist ? `openBandAssistModal('${v.id}')` : `openVenueAssistModal('${v.id}')`}">
+              <div class="w-full md:w-44 h-28 rounded-xl overflow-hidden border border-border bg-black/40 flex-shrink-0 relative group cursor-pointer" onclick="${needsBandAssist ? `openBandAssistModal('${v.id}')` : songUnmatched && knownArtistForVideo(v) ? `openSongAssistModal('${v.id}')` : `openVenueAssistModal('${v.id}')`}">
                 <img src="/api/video/${v.id}/thumbnail" alt="" class="w-full h-full object-cover">
                 <div class="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-1 text-[11px] text-white font-semibold transition p-2 text-center">
                   ${needsBandAssist ? `
                     <svg class="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
                     <span class="text-amber-400 font-bold">Which band is this?</span>
                     <span class="text-[9px] text-zinc-300 font-normal">Click for Pop-up</span>
+                  ` : songUnmatched && knownArtistForVideo(v) ? `
+                    <svg class="w-4 h-4 text-rose-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 3-.895-3-2-3-.895-3-2zM9 10l12-3" /></svg>
+                    <span class="text-rose-300 font-bold">What song is this?</span>
+                    <span class="text-[9px] text-zinc-300 font-normal">Click to choose</span>
                   ` : `
                     <svg class="w-4 h-4 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                     <span>What venue is this?</span>
@@ -1638,6 +1654,11 @@ HTML_PAGE = """<!DOCTYPE html>
                       ${needsBandAssist ? `
                         <button type="button" onclick="openBandAssistModal('${v.id}')" class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500 hover:text-black transition">
                           🎸 Select Band
+                        </button>
+                      ` : ''}
+                      ${songUnmatched ? `
+                        <button type="button" onclick="event.stopPropagation(); openSongAssistModal('${v.id}')" class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/40 hover:bg-rose-500 hover:text-white transition">
+                          What song?
                         </button>
                       ` : ''}
                     </div>
