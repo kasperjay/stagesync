@@ -92,12 +92,42 @@ class PipelineCoordinator:
             for candidate in candidate_titles
         )
 
+    _UNRESOLVED_SONG_TITLES = {
+        "",
+        "live performance",
+        "unidentified clip",
+        "unidentified song",
+        "unknown",
+        "unidentified",
+        "instrumental",
+        "clip",
+        "none",
+        "null",
+        "n/a",
+    }
+
     @staticmethod
     def _usable_artist(artist: Optional[str]) -> str:
         value = (artist or "").strip()
         if value.casefold() in {"live artist", "unknown artist", "unknown"}:
             return ""
         return value
+
+    @classmethod
+    def _usable_song(cls, song_title: Optional[str]) -> str:
+        value = (song_title or "").strip()
+        if value.casefold() in cls._UNRESOLVED_SONG_TITLES:
+            return ""
+        return value
+
+    def is_video_song_unmatched(self, video_id: str) -> bool:
+        """Return True if a video still lacks a confidently identified song title."""
+        ident = self.db.get_identification_by_video_id(video_id)
+        if not ident:
+            return True
+        if not self._usable_song(ident.detected_song_title):
+            return True
+        return (ident.match_confidence or 0.0) < 0.50
 
     def __init__(
         self,
@@ -136,31 +166,78 @@ class PipelineCoordinator:
         self.download_dir.mkdir(parents=True, exist_ok=True)
 
     def get_song_options(self, video_id: str, query: str = "") -> Dict[str, Any]:
-        """Return setlist songs first, then bounded discography search results."""
+        """Return setlist songs first, then bounded discography search results with explicit status/errors."""
         video = self.db.get_video(video_id)
         if not video:
             raise ValueError(f"Video {video_id} not found.")
 
         ident = self.db.get_identification_by_video_id(video.id)
         concert = self.db.get_concert(ident.concert_id) if ident and ident.concert_id else None
-        setlist_songs = self._setlist_song_titles(concert)
+        ident_artist = self._usable_artist(ident.detected_artist if ident else "")
+        headliner_artist = self._usable_artist(concert.headliner_artist if concert else "")
+        artist = ident_artist or headliner_artist
+
+        is_opener = bool(
+            ident_artist
+            and headliner_artist
+            and ident_artist.casefold() != headliner_artist.casefold()
+        )
+        setlist_songs = [] if is_opener else self._setlist_song_titles(concert)
         normalized_query = query.strip().casefold()
+
         if setlist_songs:
             songs = [
-                {"title": title, "artist": ident.detected_artist if ident else (concert.headliner_artist if concert else ""), "source": "setlist"}
+                {
+                    "title": title,
+                    "artist": artist,
+                    "source": "setlist",
+                }
                 for title in setlist_songs
                 if not normalized_query or normalized_query in title.casefold()
             ]
-            return {"source": "setlist", "songs": songs[:50]}
+            if songs or len(normalized_query) < 2:
+                return {
+                    "source": "setlist",
+                    "artist": artist,
+                    "songs": songs[:50],
+                    "total_setlist_songs": len(setlist_songs),
+                }
 
-        artist = self._usable_artist(ident.detected_artist if ident else "") or (concert.headliner_artist if concert else "")
         if not artist:
-            return {"source": "none", "songs": []}
-        return {
-            "source": "musicbrainz",
-            "artist": artist,
-            "songs": self.musicbrainz_client.search_recordings(artist, query),
-        }
+            return {
+                "source": "none",
+                "songs": [],
+                "message": "Select the performing band first before searching songs.",
+            }
+
+        if len(normalized_query) < 2:
+            return {
+                "source": "musicbrainz",
+                "artist": artist,
+                "songs": [],
+                "requires_query": True,
+                "message": f"Type at least 2 characters and click Search to query {artist}'s discography.",
+            }
+
+        try:
+            mb_songs = self.musicbrainz_client.search_recordings(
+                artist,
+                query,
+                raise_on_error=True,
+            )
+            return {
+                "source": "musicbrainz",
+                "artist": artist,
+                "songs": mb_songs,
+                "fallback_from_setlist": bool(setlist_songs),
+            }
+        except Exception as exc:
+            return {
+                "source": "musicbrainz",
+                "artist": artist,
+                "songs": [],
+                "error": str(exc),
+            }
 
     def _audit_step(
         self,
@@ -1500,6 +1577,541 @@ class PipelineCoordinator:
         self.db.save_video(video)
 
         return video, concert, ident
+
+    def match_video_song(self, video_id: str) -> Dict[str, Any]:
+        """Run multi-window audio song matching on a single video without clobbering user edits.
+
+        Returns a structured dictionary explicitly distinguishing:
+        - outcome == "matched": A confident song title was identified and saved.
+        - outcome == "no_match": Matchers executed, but no song could be confidently identified.
+        - outcome == "error": Matching failed due to missing media, audio extraction, or service errors.
+        """
+        video = self.db.get_video(video_id)
+        if not video:
+            raise ValueError(f"Video {video_id} not found.")
+
+        # 1. Ensure local media file exists (or download on-demand for Drive clips)
+        if not video.file_path or not Path(video.file_path).exists():
+            if video.source_photo_id and video.source_photo_id.startswith("drive_"):
+                drive_file_id = video.source_photo_id.replace("drive_", "")
+                target_file = self.download_dir / f"{video.id}_{video.filename}"
+                try:
+                    file_path_res, sha_hash = self.drive_client.download_video(drive_file_id, target_file)
+                    video.file_path = str(file_path_res)
+                    video.file_hash_sha256 = sha_hash
+                    video.file_size_bytes = file_path_res.stat().st_size
+                    with contextlib.suppress(Exception):
+                        parsed_meta = self.metadata_parser.probe_file(file_path_res)
+                        video.duration_seconds = parsed_meta.duration_seconds
+                        video.width = parsed_meta.width
+                        video.height = parsed_meta.height
+                        video.latitude = parsed_meta.latitude or video.latitude
+                        video.longitude = parsed_meta.longitude or video.longitude
+                        if parsed_meta.recorded_at_utc:
+                            video.recorded_at_utc = parsed_meta.recorded_at_utc
+                    self.db.save_video(video)
+                except Exception as exc:
+                    return {
+                        "success": False,
+                        "matched": False,
+                        "outcome": "error",
+                        "video_id": video.id,
+                        "filename": video.filename,
+                        "error": f"Failed to download video from Google Drive: {exc}",
+                        "video": video,
+                    }
+            else:
+                return {
+                    "success": False,
+                    "matched": False,
+                    "outcome": "error",
+                    "video_id": video.id,
+                    "filename": video.filename,
+                    "error": "Video file is missing from local storage; cannot extract audio for matching.",
+                    "video": video,
+                }
+
+        file_path = Path(video.file_path)
+
+        # 2. Load existing identification / concert / venue context (preserving user-selected band/venue)
+        ident = self.db.get_identification_by_video_id(video.id)
+        preserved_artist = self._usable_artist(ident.detected_artist if ident else "")
+        preserved_status = ident.status if ident else "CONFIRMED"
+        concert: Optional[Concert] = self.db.get_concert(ident.concert_id) if ident and ident.concert_id else None
+        venue: Optional[Venue] = self.db.get_venue(concert.venue_id) if concert and concert.venue_id else None
+        if not venue and video.latitude is not None and video.longitude is not None:
+            venue = self.db.find_venue_by_coords(video.latitude, video.longitude)
+
+        # If this clip was never processed at all (no ident & no concert), run initial metadata/concert resolution
+        if not ident and not concert and video.processing_status in (VideoStatus.DISCOVERED, VideoStatus.DOWNLOADED):
+            if video.duration_seconds is None:
+                with contextlib.suppress(Exception):
+                    parsed_meta = self.metadata_parser.probe_file(file_path)
+                    video.duration_seconds = parsed_meta.duration_seconds
+                    video.width = parsed_meta.width
+                    video.height = parsed_meta.height
+                    video.latitude = parsed_meta.latitude or video.latitude
+                    video.longitude = parsed_meta.longitude or video.longitude
+                    video.recorded_at_utc = parsed_meta.recorded_at_utc or video.recorded_at_utc
+                    video.recorded_at_local = parsed_meta.recorded_at_local or video.recorded_at_local
+                    video.is_concert_candidate = parsed_meta.is_concert_candidate
+                    self.db.save_video(video)
+
+        # 3. Resolve candidate setlist songs for the performing artist
+        candidate_song_list: List[str] = []
+        if concert:
+            is_opener = bool(
+                preserved_artist
+                and concert.headliner_artist
+                and preserved_artist.casefold() != concert.headliner_artist.casefold()
+            )
+            if is_opener:
+                if venue and venue.city and concert.event_date:
+                    with contextlib.suppress(Exception):
+                        opener_setlist = self.setlist_client.search_by_city_and_date(
+                            event_date=concert.event_date,
+                            city_name=venue.city,
+                            artist_name=preserved_artist,
+                            venue_name_hint=venue.name,
+                        )
+                        if opener_setlist and opener_setlist.setlist_songs:
+                            candidate_song_list = [s.name for s in opener_setlist.setlist_songs if s.name]
+            else:
+                candidate_song_list = self._setlist_song_titles(concert)
+
+        # 4. Extract multi-window audio clips
+        try:
+            audio_clip_paths = self.audio_extractor.extract_clips(
+                video_path=file_path,
+                video_duration=video.duration_seconds,
+            )
+        except Exception as exc:
+            return {
+                "success": False,
+                "matched": False,
+                "outcome": "error",
+                "video_id": video.id,
+                "filename": video.filename,
+                "error": f"Audio extraction failed: {exc}",
+                "video": video,
+            }
+
+        audio_clip_paths = [p for p in audio_clip_paths if Path(p).exists()]
+        if not audio_clip_paths:
+            return {
+                "success": False,
+                "matched": False,
+                "outcome": "error",
+                "video_id": video.id,
+                "filename": video.filename,
+                "error": "No audio clips could be extracted from this video container.",
+                "video": video,
+            }
+
+        # 5. Tier 1: Shazam multi-window acoustic recognition
+        detected_song: Optional[str] = None
+        detected_artist: Optional[str] = None
+        detected_album: Optional[str] = None
+        confidence: float = 0.0
+        service_used = "shazamio"
+        setlist_verified = False
+        track_number: Optional[int] = None
+        lyrics_snippet: Optional[str] = None
+        raw_payload: Dict[str, Any] = {}
+
+        shazam_results = self.shazam_matcher.recognize_many(audio_clip_paths)
+        shazam_unavailable = any(r.unavailable for r in shazam_results)
+        shazam_errors = [r.error for r in shazam_results if r.error and not r.unavailable]
+
+        def _is_artist_compatible(shazam_artist: Optional[str], song_title: Optional[str]) -> bool:
+            if not preserved_artist:
+                return True
+            if candidate_song_list and self._is_setlist_song(song_title, candidate_song_list):
+                return True
+            if not shazam_artist:
+                return True
+            a = preserved_artist.casefold()
+            b = shazam_artist.strip().casefold()
+            return a in b or b in a
+
+        usable_shazam = [
+            (idx, r)
+            for idx, r in enumerate(shazam_results)
+            if r.matched and self._usable_song(r.song_title) and _is_artist_compatible(r.artist, r.song_title)
+        ]
+        usable_shazam.sort(
+            key=lambda item: (
+                self._is_setlist_song(item[1].song_title, candidate_song_list),
+                item[1].confidence,
+            ),
+            reverse=True,
+        )
+
+        best_shazam = usable_shazam[0][1] if usable_shazam else None
+        best_shazam_idx = usable_shazam[0][0] if usable_shazam else 0
+
+        def step_shazam():
+            if best_shazam:
+                payload = {
+                    "selected_window": best_shazam_idx + 1,
+                    "windows": [
+                        {"window": i + 1, "result": r.model_dump()}
+                        for i, r in enumerate(shazam_results)
+                    ],
+                }
+                return StepStatus.SUCCESS, payload, None
+            if shazam_errors:
+                return StepStatus.FAILED, {"error": shazam_errors[0]}, shazam_errors[0]
+            msg = "Shazam unavailable" if shazam_unavailable else "No Shazam match"
+            return StepStatus.SKIPPED, {"message": msg}, None
+
+        self._audit_step(video.id, PipelineStep.AUDIO_FINGERPRINT, step_shazam)
+
+        if best_shazam:
+            detected_song = self._usable_song(best_shazam.song_title)
+            detected_artist = self._usable_artist(best_shazam.artist)
+            detected_album = best_shazam.album
+            confidence = best_shazam.confidence
+            service_used = "shazamio"
+            raw_payload = {
+                "selected_window": best_shazam_idx + 1,
+                "windows": [
+                    {"window": i + 1, "result": r.model_dump()}
+                    for i, r in enumerate(shazam_results)
+                ],
+            }
+            if candidate_song_list and detected_song:
+                setlist_verified = self._is_setlist_song(detected_song, candidate_song_list)
+                if setlist_verified:
+                    confidence = max(confidence, 0.95)
+
+        # 6. Tier 2: Gemini Multimodal Audio Judge (if Shazam didn't yield high-confidence match)
+        artist_for_ai = (
+            preserved_artist
+            or self._usable_artist(concert.headliner_artist if concert else "")
+            or self._usable_artist(detected_artist)
+        )
+        gemini_ran = False
+        gemini_error: Optional[str] = None
+        gemini_reasoning: Optional[str] = None
+
+        if (not detected_song or confidence < 0.85) and (candidate_song_list or artist_for_ai):
+            gemini_ran = True
+            mid_idx = len(audio_clip_paths) // 2
+            window_order = [mid_idx]
+            if len(audio_clip_paths) > 1:
+                alt_idx = 0 if mid_idx != 0 else 1
+                window_order.append(alt_idx)
+
+            best_ai_res: Optional[AIAudioJudgeResult] = None
+            for win_idx in window_order:
+                ai_res = self.ai_audio_judge.evaluate_live_clip(
+                    audio_path=audio_clip_paths[win_idx],
+                    candidate_songs=candidate_song_list,
+                    artist_name=artist_for_ai or "Live Artist",
+                    venue_name=venue.name if venue else "Concert Venue",
+                    event_date=concert.event_date if concert else "",
+                    allow_open_catalog=bool(artist_for_ai),
+                )
+                best_ai_res = ai_res
+                if ai_res.matched and self._usable_song(ai_res.song_title):
+                    break
+                if ai_res.error:
+                    # Don't repeat network/API failure across more windows
+                    break
+
+            def step_llm():
+                if best_ai_res and best_ai_res.matched and self._usable_song(best_ai_res.song_title):
+                    return StepStatus.SUCCESS, best_ai_res.model_dump(), None
+                if best_ai_res and best_ai_res.error:
+                    return StepStatus.FAILED, {"error": best_ai_res.error}, best_ai_res.error
+                reason = (best_ai_res.reasoning if best_ai_res else None) or "AI could not disambiguate"
+                return StepStatus.SKIPPED, {"message": reason}, None
+
+            self._audit_step(video.id, PipelineStep.LLM_DISAMBIGUATION, step_llm)
+
+            if best_ai_res:
+                gemini_error = best_ai_res.error
+                gemini_reasoning = best_ai_res.reasoning
+                if best_ai_res.matched and self._usable_song(best_ai_res.song_title):
+                    detected_song = self._usable_song(best_ai_res.song_title)
+                    detected_artist = artist_for_ai or detected_artist
+                    confidence = best_ai_res.confidence
+                    service_used = "gemini_multimodal"
+                    setlist_verified = bool(candidate_song_list and best_ai_res.setlist_index)
+                    track_number = best_ai_res.setlist_index
+                    lyrics_snippet = best_ai_res.lyrics_detected
+                    raw_payload = best_ai_res.raw_payload
+
+        final_artist = (
+            preserved_artist
+            or self._usable_artist(detected_artist)
+            or self._usable_artist(concert.headliner_artist if concert else "")
+        )
+
+        diagnostics: Dict[str, Any] = {
+            "windows_checked": len(audio_clip_paths),
+            "setlist_candidates_count": len(candidate_song_list),
+            "artist_context": final_artist or None,
+            "shazam_status": (
+                "matched"
+                if best_shazam
+                else ("unavailable" if shazam_unavailable else ("error" if shazam_errors else "no_match"))
+            ),
+            "shazam_error": shazam_errors[0] if shazam_errors else None,
+            "gemini_status": (
+                "matched"
+                if (service_used == "gemini_multimodal" and detected_song)
+                else ("skipped" if not gemini_ran else ("error" if gemini_error else "no_match"))
+            ),
+            "gemini_error": gemini_error,
+            "gemini_reasoning": gemini_reasoning,
+        }
+
+        # 7A. Outcome: MATCHED
+        if detected_song and confidence >= 0.50:
+            if not ident:
+                ident = Identification(
+                    video_id=video.id,
+                    concert_id=concert.id if concert else None,
+                    detected_song_title=detected_song,
+                    detected_artist=final_artist or "Live Artist",
+                    album_name=detected_album,
+                    match_confidence=round(confidence, 2),
+                    fingerprint_service=service_used,
+                    setlist_verified=setlist_verified,
+                    track_number_in_setlist=track_number,
+                    identified_lyrics_snippet=lyrics_snippet,
+                    raw_service_payload=raw_payload,
+                    status=preserved_status,
+                )
+            else:
+                ident.detected_song_title = detected_song
+                if final_artist:
+                    ident.detected_artist = final_artist
+                if detected_album:
+                    ident.album_name = detected_album
+                ident.match_confidence = round(confidence, 2)
+                ident.fingerprint_service = service_used
+                ident.setlist_verified = setlist_verified or ident.setlist_verified
+                if track_number is not None:
+                    ident.track_number_in_setlist = track_number
+                if lyrics_snippet:
+                    ident.identified_lyrics_snippet = lyrics_snippet
+                ident.raw_service_payload = raw_payload
+            self.db.save_identification(ident)
+
+            if video.processing_status in (
+                VideoStatus.DISCOVERED,
+                VideoStatus.DOWNLOADED,
+                VideoStatus.ANALYZING_METADATA,
+                VideoStatus.CONCERT_MATCHED,
+                VideoStatus.FAILED,
+            ):
+                video.processing_status = VideoStatus.PENDING_REVIEW
+                self.db.save_video(video)
+
+            yt_meta = self.metadata_gen.generate_metadata(
+                video=video,
+                identification=ident,
+                concert=concert,
+                venue=venue,
+            )
+            upload_job = self.db.get_youtube_upload_by_video_id(video.id)
+            if not upload_job:
+                upload_job = YouTubeUpload(
+                    video_id=video.id,
+                    title=yt_meta.title,
+                    description=yt_meta.description,
+                    tags=yt_meta.tags,
+                    category_id=yt_meta.category_id,
+                    privacy_status=PrivacyStatus(self.settings.default_privacy),
+                    upload_status="DRAFT",
+                    total_bytes=video.file_size_bytes or 0,
+                )
+            else:
+                upload_job.title = yt_meta.title
+                upload_job.description = yt_meta.description
+                upload_job.tags = yt_meta.tags
+            self.db.save_youtube_upload(upload_job)
+
+            service_label = "Gemini Audio AI" if service_used == "gemini_multimodal" else "Shazam"
+            pct = int(round(confidence * 100))
+            artist_suffix = f" by {final_artist}" if final_artist else ""
+            return {
+                "success": True,
+                "matched": True,
+                "outcome": "matched",
+                "video_id": video.id,
+                "filename": video.filename,
+                "song_title": detected_song,
+                "artist": final_artist or None,
+                "confidence": round(confidence, 2),
+                "service": service_used,
+                "lyrics_snippet": lyrics_snippet,
+                "reasoning": gemini_reasoning,
+                "message": f'Matched "{detected_song}"{artist_suffix} ({pct}% confidence via {service_label}).',
+                "diagnostics": diagnostics,
+                "video": video,
+            }
+
+        # 7B. Outcome: ERROR (when no matcher could complete cleanly)
+        shazam_failed = bool(shazam_unavailable or shazam_errors)
+        gemini_failed_or_missing = bool(gemini_error or not gemini_ran)
+        if shazam_failed and gemini_failed_or_missing:
+            err_parts: List[str] = []
+            if shazam_errors:
+                err_parts.append(f"Shazam error: {shazam_errors[0]}")
+            elif shazam_unavailable:
+                err_parts.append("Shazam unavailable (shazamio not installed)")
+            if gemini_error:
+                err_parts.append(gemini_error)
+            elif not gemini_ran:
+                err_parts.append("Gemini AI skipped (performing band is unknown — select the band first)")
+            return {
+                "success": False,
+                "matched": False,
+                "outcome": "error",
+                "video_id": video.id,
+                "filename": video.filename,
+                "error": " • ".join(err_parts) or "Song matching services failed.",
+                "diagnostics": diagnostics,
+                "video": video,
+            }
+
+        # 7C. Outcome: NO MATCH (matchers ran, no confident song match found)
+        warnings: List[str] = []
+        if shazam_errors:
+            warnings.append(f"Shazam encountered an error ({shazam_errors[0]})")
+        elif shazam_unavailable:
+            warnings.append("Shazam acoustic fingerprinting is unavailable")
+        if gemini_error:
+            warnings.append(f"Gemini AI encountered an error ({gemini_error})")
+
+        if not ident and (concert or final_artist):
+            ident = Identification(
+                video_id=video.id,
+                concert_id=concert.id if concert else None,
+                detected_song_title="Live Performance",
+                detected_artist=final_artist or "Live Artist",
+                match_confidence=0.0,
+                fingerprint_service=service_used,
+                setlist_verified=False,
+                status=preserved_status,
+            )
+            self.db.save_identification(ident)
+
+        if video.processing_status in (VideoStatus.DISCOVERED, VideoStatus.DOWNLOADED) and (
+            video.is_concert_candidate or concert
+        ):
+            video.processing_status = VideoStatus.PENDING_REVIEW
+            self.db.save_video(video)
+
+        detail_parts = [f"Checked {len(audio_clip_paths)} audio clip window(s)"]
+        if not shazam_failed:
+            detail_parts.append("Shazam found no acoustic match")
+        if gemini_ran and not gemini_error:
+            short_reason = (gemini_reasoning or "").strip()
+            if len(short_reason) > 140:
+                short_reason = short_reason[:137].rstrip() + "..."
+            detail_parts.append(
+                f"Gemini AI could not confidently identify the song ({short_reason})"
+                if short_reason
+                else "Gemini AI could not confidently identify the song"
+            )
+        elif not gemini_ran and not final_artist:
+            detail_parts.append("select the performing band first to enable AI setlist/catalog matching")
+
+        if warnings:
+            detail_parts.extend(warnings)
+
+        return {
+            "success": True,
+            "matched": False,
+            "outcome": "no_match",
+            "video_id": video.id,
+            "filename": video.filename,
+            "song_title": None,
+            "artist": final_artist or None,
+            "confidence": 0.0,
+            "reasoning": gemini_reasoning,
+            "warnings": warnings,
+            "message": "No song match found — " + "; ".join(detail_parts) + ".",
+            "diagnostics": diagnostics,
+            "video": video,
+        }
+
+    def match_unidentified_songs(self, limit: int = 25) -> Dict[str, Any]:
+        """Run audio song matching across active videos whose songs are currently unidentified."""
+        eligible_statuses = {
+            VideoStatus.DISCOVERED,
+            VideoStatus.DOWNLOADED,
+            VideoStatus.CONCERT_MATCHED,
+            VideoStatus.PENDING_REVIEW,
+        }
+        all_videos = self.db.list_videos()
+        candidates = [
+            v
+            for v in all_videos
+            if v.processing_status in eligible_statuses
+            and not self._is_short_clip(v.duration_seconds)
+            and self.is_video_song_unmatched(v.id)
+        ][: max(1, limit)]
+
+        if not candidates:
+            return {
+                "success": True,
+                "total_checked": 0,
+                "matched_count": 0,
+                "no_match_count": 0,
+                "error_count": 0,
+                "results": [],
+                "message": "All active clips already have identified songs.",
+            }
+
+        results: List[Dict[str, Any]] = []
+        matched_count = 0
+        no_match_count = 0
+        error_count = 0
+
+        for v in candidates:
+            try:
+                res = self.match_video_song(v.id)
+            except Exception as exc:
+                logger.exception("Batch song matching error on %s: %s", v.id, exc)
+                res = {
+                    "success": False,
+                    "matched": False,
+                    "outcome": "error",
+                    "video_id": v.id,
+                    "filename": v.filename,
+                    "error": str(exc),
+                }
+            # Strip non-JSON-serializable raw model object in summary list
+            clean_res = {k: val for k, val in res.items() if k != "video"}
+            results.append(clean_res)
+            outcome = res.get("outcome")
+            if outcome == "matched":
+                matched_count += 1
+            elif outcome == "error":
+                error_count += 1
+            else:
+                no_match_count += 1
+
+        summary_msg = (
+            f"Checked {len(results)} clip(s): "
+            f"{matched_count} matched, {no_match_count} returned no match"
+            + (f", {error_count} failed with errors." if error_count else ".")
+        )
+        return {
+            "success": error_count < len(results),
+            "total_checked": len(results),
+            "matched_count": matched_count,
+            "no_match_count": no_match_count,
+            "error_count": error_count,
+            "results": results,
+            "message": summary_msg,
+        }
 
     # -------------------------------------------------------------------------
     # Publication & Upload Dispatcher

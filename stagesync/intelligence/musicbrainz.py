@@ -23,6 +23,7 @@ class MusicBrainzClient:
         artist_name: str,
         query: str,
         limit: int = 25,
+        raise_on_error: bool = False,
     ) -> List[Dict[str, str]]:
         artist = artist_name.strip()
         title_query = query.strip()
@@ -46,6 +47,8 @@ class MusicBrainzClient:
             recordings = response.json().get("recordings", [])
         except Exception as exc:
             logger.warning("MusicBrainz recording search failed for %s: %s", artist, exc)
+            if raise_on_error:
+                raise RuntimeError(f"MusicBrainz discography search failed: {exc}") from exc
             return []
 
         results: List[Dict[str, str]] = []

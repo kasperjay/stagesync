@@ -9,6 +9,7 @@ Powered by aiohttp.web with zero node/npm build dependencies.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import mimetypes
@@ -185,6 +186,13 @@ HTML_PAGE = """<!DOCTYPE html>
             <svg class="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
             <span>Run AI Matcher</span>
           </button>
+          <button onclick="triggerBatchSongMatching(this)" id="sidebar-btn-match-songs" class="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800/50 transition">
+            <span class="flex items-center gap-2.5">
+              <svg class="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+              <span>Match Unidentified Songs</span>
+            </span>
+            <span id="sidebar-unmatched-songs-count" class="text-[10px] font-mono tabular px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-border">0</span>
+          </button>
           <button onclick="triggerAction('upload')" id="sidebar-btn-upload" class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800/50 transition">
             <svg class="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
             <span>Publish to YouTube</span>
@@ -262,6 +270,11 @@ HTML_PAGE = """<!DOCTYPE html>
         <button onclick="openScanModal()" class="px-3 py-1.5 text-xs font-semibold rounded-xl bg-card border border-border hover:bg-card-hover text-zinc-200 shadow-sm transition flex items-center gap-1.5">
           <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
           <span>Scan Media</span>
+        </button>
+
+        <button onclick="triggerBatchSongMatching(this)" id="top-btn-match-songs" title="Run audio song matching on unidentified clips" class="px-3 py-1.5 text-xs font-semibold rounded-xl bg-card border border-border hover:bg-card-hover text-zinc-200 shadow-sm transition flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+          <span>Match Songs (<span id="top-unmatched-songs-count" class="tabular">0</span>)</span>
         </button>
 
         <button onclick="triggerAction('upload')" id="top-btn-upload" class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition flex items-center gap-1.5">
@@ -546,6 +559,10 @@ HTML_PAGE = """<!DOCTYPE html>
               <svg class="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
               <span>Process Pending Clips</span>
             </button>
+            <button onclick="triggerBatchSongMatching(this)" id="overview-btn-match-songs" class="px-3.5 py-2 text-xs font-semibold rounded-xl bg-card-subtle hover:bg-zinc-800 text-zinc-200 border border-border transition flex items-center gap-2">
+              <svg class="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+              <span>Match Unidentified Songs</span>
+            </button>
             <button onclick="triggerAction('upload')" id="btn-upload-action" class="px-4 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition flex items-center gap-2">
               <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
               <span>Publish Approved to YouTube</span>
@@ -617,12 +634,25 @@ HTML_PAGE = """<!DOCTYPE html>
           <div class="space-y-1 pt-1">
             <div class="flex justify-between text-[10px] text-zinc-400 font-mono">
               <span>Match Confidence</span>
-              <span id="drawer-confidence-text" class="text-zinc-300 font-bold">95.0%</span>
+              <span id="drawer-confidence-text" class="text-zinc-300 font-bold tabular">95.0%</span>
             </div>
             <div class="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
               <div id="drawer-confidence-bar" class="bg-emerald-500 h-1.5 rounded-full transition-all duration-300" style="width: 95%"></div>
             </div>
           </div>
+
+          <!-- Manual Song Match Controls & Feedback inside Drawer -->
+          <div class="pt-2 border-t border-indigo-900/40 flex flex-wrap items-center gap-2">
+            <button type="button" id="drawer-btn-match-song" onclick="triggerSongMatching(activeSelectedVideo ? activeSelectedVideo.id : '', this)" class="px-3 py-1.5 rounded-lg bg-card border border-border hover:bg-card-hover text-zinc-100 text-[11px] font-semibold transition flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+              <span>Run Audio Match</span>
+            </button>
+            <button type="button" id="drawer-btn-pick-song" onclick="openSongAssistModal(activeSelectedVideo ? activeSelectedVideo.id : '')" class="px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-[11px] font-semibold transition flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+              <span>Search / Pick Song</span>
+            </button>
+          </div>
+          <div id="drawer-match-feedback" class="hidden"></div>
         </div>
 
         <!-- Venue & Concert Metadata -->
@@ -1018,10 +1048,17 @@ HTML_PAGE = """<!DOCTYPE html>
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
-      <div class="bg-card-subtle border border-border rounded-xl p-3 text-xs space-y-1">
-        <div id="song-assist-file" class="font-mono text-zinc-200 truncate">video.mov</div>
-        <div id="song-assist-artist" class="text-brand-400">Artist not selected</div>
+      <div class="bg-card-subtle border border-border rounded-xl p-3 text-xs flex items-center justify-between gap-3">
+        <div class="min-w-0 space-y-0.5">
+          <div id="song-assist-file" class="font-mono text-zinc-200 truncate">video.mov</div>
+          <div id="song-assist-artist" class="text-brand-400 font-medium truncate">Artist not selected</div>
+        </div>
+        <button type="button" id="btn-modal-auto-match" onclick="triggerModalAudioMatch()" class="px-3 py-1.5 rounded-lg bg-card hover:bg-card-hover border border-border text-zinc-100 text-[11px] font-semibold transition flex items-center gap-1.5 shrink-0" title="Analyze clip audio with Shazam and Gemini AI">
+          <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+          <span>Auto-Match Audio</span>
+        </button>
       </div>
+      <div id="song-assist-match-feedback" class="hidden text-xs"></div>
       <div class="bg-canvas border border-border rounded-xl p-3.5 space-y-2.5">
         <div class="flex items-center gap-3">
           <button type="button" id="song-assist-play" onclick="toggleSongAssistPlayback()" class="w-10 h-10 shrink-0 rounded-full bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center transition shadow-md shadow-brand-500/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400" aria-label="Play audio clip">
@@ -1058,11 +1095,38 @@ HTML_PAGE = """<!DOCTYPE html>
         <audio id="song-assist-audio" preload="metadata" class="hidden"></audio>
       </div>
       <div class="space-y-2">
-        <label for="song-assist-search" class="text-xs font-semibold text-zinc-300">Search song titles</label>
-        <input type="search" id="song-assist-search" placeholder="Start typing a song title..." autocomplete="off" class="w-full bg-canvas border border-border rounded-xl px-3 py-2.5 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" oninput="searchSongOptions()" />
-        <div id="song-assist-source" class="text-[10px] text-zinc-500"></div>
-        <div id="song-options-container" class="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+        <div class="flex items-center justify-between">
+          <label for="song-assist-search" class="text-xs font-semibold text-zinc-300">Search song titles</label>
+          <div id="song-assist-source" class="text-[10px] font-mono text-zinc-400"></div>
+        </div>
+        <div class="flex items-center gap-2">
+          <input type="search" id="song-assist-search" placeholder="Type song title (min 2 chars for discography)..." autocomplete="off" class="flex-1 bg-canvas border border-border rounded-xl px-3 py-2 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" oninput="searchSongOptions()" onkeydown="if(event.key==='Enter'){event.preventDefault();runManualSongSearch();}" />
+          <button type="button" id="btn-song-search" onclick="runManualSongSearch()" class="px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold transition flex items-center gap-1.5 shrink-0">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+            <span>Search</span>
+          </button>
+        </div>
+        <div id="song-search-status-banner" class="hidden text-xs"></div>
+        <div id="song-options-container" class="max-h-48 overflow-y-auto space-y-1.5 pr-1">
           <div class="text-center py-5 text-zinc-500 text-xs">Loading song choices...</div>
+        </div>
+      </div>
+      <div class="pt-1 border-t border-border/60">
+        <div class="flex items-center gap-2">
+          <input
+            type="text"
+            id="song-custom-input"
+            placeholder="Or enter unlisted / live song title manually..."
+            class="flex-1 bg-canvas border border-border rounded-xl px-3 py-2 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();selectCustomSongFromInput();}"
+          />
+          <button
+            type="button"
+            onclick="selectCustomSongFromInput()"
+            class="px-3.5 py-2 text-xs font-semibold rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition shrink-0"
+          >
+            Use Title
+          </button>
         </div>
       </div>
       <div id="song-selected-preview" class="hidden p-3 rounded-xl bg-brand-500/10 border border-brand-500/30 text-xs space-y-1">
@@ -1077,6 +1141,9 @@ HTML_PAGE = """<!DOCTYPE html>
       </div>
     </div>
   </div>
+
+  <!-- Global Toast Notification Stack -->
+  <div id="toast-container" aria-live="polite" class="fixed top-4 right-4 z-[70] flex flex-col gap-2.5 max-w-md w-full pointer-events-none px-4 sm:px-0"></div>
 
   <script>
     let activeTab = 'board';
@@ -1139,6 +1206,180 @@ HTML_PAGE = """<!DOCTYPE html>
     let selectedSongTitle = null;
     let songSearchTimer = null;
     let isSongAssistScrubbing = false;
+    const videoMatchFeedback = {};
+    let isBatchMatchingSongs = false;
+
+    function showToast({ type = 'info', title = '', message = '', durationMs = 6000 } = {}) {
+      const container = document.getElementById('toast-container');
+      if (!container) return;
+
+      const styles = {
+        success: {
+          box: 'bg-card border-emerald-500/40 text-zinc-100',
+          badge: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+          title: 'text-emerald-300',
+          icon: '<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M5 13l4 4L19 7" /></svg>'
+        },
+        warning: {
+          box: 'bg-card border-amber-500/40 text-zinc-100',
+          badge: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+          title: 'text-amber-300',
+          icon: '<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>'
+        },
+        error: {
+          box: 'bg-card border-rose-500/40 text-zinc-100',
+          badge: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
+          title: 'text-rose-300',
+          icon: '<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>'
+        },
+        info: {
+          box: 'bg-card border-brand-500/40 text-zinc-100',
+          badge: 'bg-brand-500/15 text-brand-400 border-brand-500/30',
+          title: 'text-brand-300',
+          icon: '<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>'
+        }
+      };
+
+      const theme = styles[type] || styles.info;
+      const toast = document.createElement('div');
+      toast.className = `pointer-events-auto border rounded-xl p-3.5 shadow-2xl flex items-start gap-3 text-xs transition-all duration-200 ${theme.box}`;
+      toast.innerHTML = `
+        <div class="w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${theme.badge}">
+          ${theme.icon}
+        </div>
+        <div class="min-w-0 flex-1 space-y-0.5">
+          ${title ? `<div class="font-bold ${theme.title}">${escapeHtml(title)}</div>` : ''}
+          <div class="text-zinc-300 leading-snug break-words">${escapeHtml(message)}</div>
+        </div>
+        <button type="button" aria-label="Dismiss notification" class="text-zinc-400 hover:text-white p-0.5 rounded hover:bg-zinc-800 transition shrink-0">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      `;
+      const closeBtn = toast.querySelector('button');
+      const removeToast = () => {
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
+      };
+      if (closeBtn) closeBtn.onclick = removeToast;
+      container.appendChild(toast);
+
+      if (durationMs > 0) {
+        setTimeout(removeToast, durationMs);
+      }
+      return toast;
+    }
+
+    function setVideoMatchFeedback(videoId, payload) {
+      if (!videoId) return;
+      videoMatchFeedback[videoId] = {
+        ...payload,
+        updatedAt: Date.now()
+      };
+      renderDrawerMatchFeedback(videoId);
+    }
+
+    function dismissVideoMatchFeedback(videoId) {
+      if (!videoId) return;
+      delete videoMatchFeedback[videoId];
+      renderCurrentView();
+      renderDrawerMatchFeedback(videoId);
+    }
+
+    function renderVideoMatchBanner(videoId, compact = false) {
+      const fb = videoMatchFeedback[videoId];
+      if (!fb) return '';
+      const safeId = escapeHtml(videoId);
+      const pad = compact ? 'p-2.5' : 'p-3';
+
+      if (fb.state === 'matching') {
+        return `
+          <div class="${pad} rounded-xl bg-indigo-950/40 border border-brand-500/30 text-xs flex items-center gap-2.5">
+            <svg class="w-4 h-4 text-brand-400 animate-spin shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+            <div class="min-w-0 flex-1">
+              <div class="font-bold text-brand-300 text-[11px]">${escapeHtml(fb.title || 'Searching for Song Match...')}</div>
+              ${!compact && fb.detail ? `<div class="text-[11px] text-zinc-300 mt-0.5">${escapeHtml(fb.detail)}</div>` : ''}
+            </div>
+          </div>
+        `;
+      }
+
+      if (fb.state === 'matched') {
+        return `
+          <div class="${pad} rounded-xl bg-emerald-950/35 border border-emerald-500/35 text-xs flex items-start justify-between gap-2">
+            <div class="min-w-0 space-y-0.5">
+              <div class="font-bold text-emerald-300 text-[11px]">✓ ${escapeHtml(fb.title || 'Song Matched')}</div>
+              ${fb.detail ? `<div class="text-[11px] text-zinc-200 leading-snug break-words">${escapeHtml(fb.detail)}</div>` : ''}
+            </div>
+            <button type="button" onclick="event.stopPropagation(); dismissVideoMatchFeedback('${safeId}')" class="text-zinc-400 hover:text-white px-1 text-xs leading-none shrink-0" aria-label="Dismiss match notice">×</button>
+          </div>
+        `;
+      }
+
+      if (fb.state === 'no_match') {
+        const v = videosData.find(item => item.id === videoId);
+        const canPickSong = Boolean(knownArtistForVideo(v));
+        return `
+          <div class="${pad} rounded-xl bg-amber-950/35 border border-amber-500/35 text-xs space-y-2">
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0 space-y-0.5">
+                <div class="font-bold text-amber-300 text-[11px]">⚠ ${escapeHtml(fb.title || 'No Song Match Found')}</div>
+                ${fb.detail ? `<div class="text-[11px] text-zinc-300 leading-snug break-words">${escapeHtml(fb.detail)}</div>` : ''}
+              </div>
+              <button type="button" onclick="event.stopPropagation(); dismissVideoMatchFeedback('${safeId}')" class="text-zinc-400 hover:text-white px-1 text-xs leading-none shrink-0" aria-label="Dismiss notice">×</button>
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5">
+              <button type="button" onclick="event.stopPropagation(); triggerSongMatching('${safeId}', this)" class="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-[10px] font-semibold transition">Retry Audio Match</button>
+              <button type="button" onclick="event.stopPropagation(); ${canPickSong ? `openSongAssistModal('${safeId}')` : `openBandAssistModal('${safeId}')`}" class="px-2 py-1 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-[10px] font-semibold transition">${canPickSong ? 'Search / Pick Manually' : 'Select Band First'}</button>
+            </div>
+          </div>
+        `;
+      }
+
+      if (fb.state === 'error') {
+        return `
+          <div class="${pad} rounded-xl bg-rose-950/40 border border-rose-500/40 text-xs space-y-2">
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0 space-y-0.5">
+                <div class="font-bold text-rose-300 text-[11px]">✕ ${escapeHtml(fb.title || 'Song Match Error')}</div>
+                ${fb.detail ? `<div class="text-[11px] text-rose-200/90 leading-snug break-words">${escapeHtml(fb.detail)}</div>` : ''}
+              </div>
+              <button type="button" onclick="event.stopPropagation(); dismissVideoMatchFeedback('${safeId}')" class="text-zinc-400 hover:text-white px-1 text-xs leading-none shrink-0" aria-label="Dismiss error">×</button>
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5">
+              <button type="button" onclick="event.stopPropagation(); triggerSongMatching('${safeId}', this)" class="px-2 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/40 text-[10px] font-semibold transition">Retry Match</button>
+              <button type="button" onclick="event.stopPropagation(); openSongAssistModal('${safeId}')" class="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-[10px] font-semibold transition">Pick Manually</button>
+            </div>
+          </div>
+        `;
+      }
+      return '';
+    }
+
+    function renderDrawerMatchFeedback(videoId) {
+      if (!activeSelectedVideo || activeSelectedVideo.id !== videoId) return;
+      const box = document.getElementById('drawer-match-feedback');
+      if (!box) return;
+      const html = renderVideoMatchBanner(videoId, false);
+      if (html) {
+        box.innerHTML = html;
+        box.classList.remove('hidden');
+      } else {
+        box.innerHTML = '';
+        box.classList.add('hidden');
+      }
+    }
+
+    function countUnmatchedSongVideos() {
+      const eligible = ['DISCOVERED', 'DOWNLOADED', 'CONCERT_MATCHED', 'PENDING_REVIEW'];
+      return (videosData || []).filter(v => eligible.includes(v.processing_status) && isSongUnmatched(v)).length;
+    }
+
+    function updateUnmatchedSongCounters() {
+      const count = countUnmatchedSongVideos();
+      const topEl = document.getElementById('top-unmatched-songs-count');
+      const sideEl = document.getElementById('sidebar-unmatched-songs-count');
+      if (topEl) topEl.innerText = String(count);
+      if (sideEl) sideEl.innerText = String(count);
+    }
 
     function formatAudioTime(sec) {
       if (isNaN(sec) || sec === null || sec === undefined || sec < 0) return '0:00';
@@ -1156,6 +1397,7 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     function openSongAssistModal(id) {
+      if (!id && activeSelectedVideo) id = activeSelectedVideo.id;
       const v = videosData.find(item => item.id === id);
       if (!v) return;
       const artist = knownArtistForVideo(v);
@@ -1169,6 +1411,19 @@ HTML_PAGE = """<!DOCTYPE html>
 
       document.getElementById('song-assist-file').innerText = v.filename || 'video.mov';
       document.getElementById('song-assist-artist').innerText = artist;
+
+      const modalMatchFb = document.getElementById('song-assist-match-feedback');
+      if (modalMatchFb) {
+        modalMatchFb.innerHTML = '';
+        modalMatchFb.classList.add('hidden');
+      }
+      const searchBanner = document.getElementById('song-search-status-banner');
+      if (searchBanner) {
+        searchBanner.innerHTML = '';
+        searchBanner.classList.add('hidden');
+      }
+      const customInput = document.getElementById('song-custom-input');
+      if (customInput) customInput.value = '';
 
       const audio = document.getElementById('song-assist-audio');
       if (audio) {
@@ -1193,12 +1448,15 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('btn-confirm-set-song').disabled = true;
       document.getElementById('song-options-container').innerHTML = '<div class="text-center py-5 text-zinc-500 text-xs">Loading song choices...</div>';
       document.getElementById('song-assist-modal').classList.remove('hidden');
-      loadSongOptions('');
+      loadSongOptions('', false);
     }
 
-    function closeSongAssistModal() {
+    function closeSongAssistModal(manualDismiss = true) {
       const modal = document.getElementById('song-assist-modal');
       if (modal) modal.classList.add('hidden');
+      if (manualDismiss) {
+        window._userDismissedSongModal = true;
+      }
       const audio = document.getElementById('song-assist-audio');
       if (audio) {
         audio.pause();
@@ -1319,47 +1577,197 @@ HTML_PAGE = """<!DOCTYPE html>
       });
     }
 
-    async function loadSongOptions(query) {
-      if (!activeSongAssistVideoId) return;
-      const container = document.getElementById('song-options-container');
-      if (query.length > 0 && query.length < 2) {
-        container.innerHTML = '<div class="text-center py-5 text-zinc-500 text-xs">Type at least 2 characters to search the discography.</div>';
+    function setSongSearchStatusBanner(type, htmlContent) {
+      const banner = document.getElementById('song-search-status-banner');
+      if (!banner) return;
+      if (!htmlContent) {
+        banner.innerHTML = '';
+        banner.classList.add('hidden');
         return;
       }
+      const palette = {
+        loading: 'bg-indigo-950/35 border-brand-500/30 text-brand-200',
+        success: 'bg-emerald-950/35 border-emerald-500/30 text-emerald-200',
+        warning: 'bg-amber-950/35 border-amber-500/30 text-amber-200',
+        error: 'bg-rose-950/40 border-rose-500/40 text-rose-200',
+        neutral: 'bg-card-subtle border-border text-zinc-300'
+      };
+      banner.className = `p-2.5 rounded-xl border text-xs ${palette[type] || palette.neutral}`;
+      banner.innerHTML = htmlContent;
+    }
+
+    async function loadSongOptions(query, isManualTrigger = false) {
+      if (!activeSongAssistVideoId) return;
+      const container = document.getElementById('song-options-container');
+      const searchBtn = document.getElementById('btn-song-search');
+      const cleanQuery = (query || '').trim();
+
+      if (cleanQuery.length === 1) {
+        setSongSearchStatusBanner(
+          isManualTrigger ? 'warning' : 'neutral',
+          `<span>${isManualTrigger ? '⚠ ' : ''}Type at least <strong>2 characters</strong> and click <strong>Search</strong> to query the discography.</span>`
+        );
+        container.innerHTML = '<div class="text-center py-5 text-zinc-400 text-xs">Enter at least 2 characters to run a title search.</div>';
+        return;
+      }
+
+      if (searchBtn) {
+        searchBtn.disabled = true;
+        searchBtn.innerHTML = '<svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg><span>Searching...</span>';
+      }
+      if (cleanQuery.length >= 2 || isManualTrigger) {
+        setSongSearchStatusBanner(
+          'loading',
+          `<span class="flex items-center gap-2"><svg class="w-3.5 h-3.5 animate-spin shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg><span>Searching song catalog${cleanQuery ? ` for "${escapeHtml(cleanQuery)}"` : ''}...</span></span>`
+        );
+      }
+      container.innerHTML = `
+        <div class="text-center py-5 text-zinc-400 text-xs flex items-center justify-center gap-2">
+          <svg class="w-4 h-4 text-brand-400 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+          <span>Searching setlist &amp; MusicBrainz catalog...</span>
+        </div>
+      `;
+
       try {
-        const res = await fetch(`/api/video/${activeSongAssistVideoId}/song-options?q=${encodeURIComponent(query)}`);
-        const data = await res.json();
-        const sourceLabel = data.source === 'setlist' ? 'Show setlist' : data.source === 'musicbrainz' ? 'Band discography' : 'No song source available';
+        const res = await fetch(`/api/video/${activeSongAssistVideoId}/song-options?q=${encodeURIComponent(cleanQuery)}`);
+        let data = {};
+        try {
+          data = await res.json();
+        } catch (_jsonErr) {
+          throw new Error(`Unexpected response (HTTP ${res.status})`);
+        }
+
+        const sourceLabel = data.source === 'setlist'
+          ? 'Show setlist'
+          : data.source === 'musicbrainz'
+            ? `${data.artist ? data.artist + ' discography' : 'Band discography'} (MusicBrainz)`
+            : 'No song source available';
         document.getElementById('song-assist-source').innerText = sourceLabel;
-        if (!data.songs?.length) {
-          container.innerHTML = `<div class="text-center py-5 text-zinc-500 text-xs">${data.source === 'musicbrainz' ? 'No matching titles found.' : 'No song choices found.'}</div>`;
+
+        if (!res.ok || data.error) {
+          const errMsg = data.error || `Catalog search failed with HTTP ${res.status}.`;
+          setSongSearchStatusBanner(
+            'error',
+            `<div class="flex items-center justify-between gap-2"><span><strong>Search Failed:</strong> ${escapeHtml(errMsg)}</span><button type="button" onclick="runManualSongSearch()" class="px-2 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 border border-rose-500/40 text-[10px] font-semibold shrink-0">Retry</button></div>`
+          );
+          container.innerHTML = '<div class="text-center py-4 text-rose-300 text-xs">Catalog lookup encountered an error. Retry above or enter the song title manually below.</div>';
+          if (isManualTrigger) {
+            showToast({ type: 'error', title: 'Song Search Failed', message: errMsg, durationMs: 7000 });
+          }
           return;
         }
-        container.innerHTML = data.songs.map((song) => {
+
+        if (data.requires_query) {
+          const promptMsg = data.message || 'Type at least 2 characters above and click Search to query the band discography.';
+          setSongSearchStatusBanner(
+            isManualTrigger ? 'warning' : 'neutral',
+            `<span>${isManualTrigger ? '⚠ ' : ''}${escapeHtml(promptMsg)}</span>`
+          );
+          container.innerHTML = `<div class="p-4 rounded-xl bg-card-subtle border border-border text-center text-zinc-400 text-xs">${escapeHtml(promptMsg)}</div>`;
+          return;
+        }
+
+        const songs = Array.isArray(data.songs) ? data.songs : [];
+        if (songs.length === 0) {
+          const noMatchMsg = cleanQuery
+            ? `No songs matching "${cleanQuery}" were found in ${sourceLabel}.`
+            : (data.message || `No song choices found in ${sourceLabel}.`);
+          setSongSearchStatusBanner('warning', `<span>⚠ <strong>No Matches:</strong> ${escapeHtml(noMatchMsg)}</span>`);
+          const encodedCustom = encodeURIComponent(cleanQuery).replace(/'/g, '%27');
+          container.innerHTML = `
+            <div class="p-4 rounded-xl bg-card-subtle border border-amber-500/30 text-center space-y-2.5">
+              <div class="text-xs font-semibold text-amber-300">${escapeHtml(noMatchMsg)}</div>
+              <div class="text-[11px] text-zinc-400">Check spelling, try a shorter keyword, or save a custom title directly.</div>
+              ${cleanQuery ? `
+                <button type="button" onclick="selectCustomSongTitle(decodeURIComponent('${encodedCustom}'))" class="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-brand-300 border border-zinc-700 text-xs font-semibold transition">
+                  Use "${escapeHtml(cleanQuery)}" as custom song title
+                </button>
+              ` : ''}
+            </div>
+          `;
+          if (isManualTrigger) {
+            showToast({ type: 'warning', title: 'No Matching Songs Found', message: noMatchMsg, durationMs: 5000 });
+          }
+          return;
+        }
+
+        if (cleanQuery) {
+          setSongSearchStatusBanner(
+            'success',
+            `<span>✓ Found <strong class="tabular">${songs.length}</strong> matching song${songs.length === 1 ? '' : 's'} in ${escapeHtml(sourceLabel)}.</span>`
+          );
+        } else {
+          setSongSearchStatusBanner(
+            'neutral',
+            `<span>Showing <strong class="tabular">${songs.length}</strong> song${songs.length === 1 ? '' : 's'} from ${escapeHtml(sourceLabel)}.</span>`
+          );
+        }
+
+        container.innerHTML = songs.map((song) => {
           const encodedTitle = encodeURIComponent(song.title).replace(/'/g, '%27');
+          const badgeText = song.source === 'setlist' ? 'Setlist' : 'Discography';
           return `
           <button type="button" onclick="selectSongOption(decodeURIComponent('${encodedTitle}'))" class="w-full text-left p-2.5 rounded-xl bg-card-subtle hover:bg-card-hover border border-border hover:border-brand-500/50 cursor-pointer transition flex items-center justify-between gap-3 group">
-            <span class="font-semibold text-xs text-zinc-100 group-hover:text-brand-300">${escapeHtml(song.title)}</span>
-            <span class="text-[10px] text-zinc-500">Select</span>
+            <span class="font-semibold text-xs text-zinc-100 group-hover:text-brand-300 truncate">${escapeHtml(song.title)}</span>
+            <span class="flex items-center gap-1.5 shrink-0">
+              <span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-zinc-800 text-zinc-400 border border-border">${badgeText}</span>
+              <span class="text-[10px] text-zinc-400 group-hover:text-white font-semibold">Select</span>
+            </span>
           </button>
         `;
         }).join('');
       } catch (err) {
-        container.innerHTML = '<div class="text-center py-5 text-rose-300 text-xs">Could not load song choices.</div>';
+        const errMsg = err?.message || String(err);
+        setSongSearchStatusBanner(
+          'error',
+          `<div class="flex items-center justify-between gap-2"><span><strong>Search Error:</strong> ${escapeHtml(errMsg)}</span><button type="button" onclick="runManualSongSearch()" class="px-2 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 border border-rose-500/40 text-[10px] font-semibold shrink-0">Retry</button></div>`
+        );
+        container.innerHTML = '<div class="text-center py-5 text-rose-300 text-xs">Could not load song choices due to a network or server error.</div>';
+        if (isManualTrigger) {
+          showToast({ type: 'error', title: 'Song Search Error', message: errMsg, durationMs: 7000 });
+        }
+      } finally {
+        if (searchBtn) {
+          searchBtn.disabled = false;
+          searchBtn.innerHTML = '<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg><span>Search</span>';
+        }
       }
     }
 
     function searchSongOptions() {
       clearTimeout(songSearchTimer);
       const query = document.getElementById('song-assist-search').value.trim();
-      songSearchTimer = setTimeout(() => loadSongOptions(query), 250);
+      songSearchTimer = setTimeout(() => loadSongOptions(query, false), 300);
+    }
+
+    function runManualSongSearch() {
+      clearTimeout(songSearchTimer);
+      const input = document.getElementById('song-assist-search');
+      const query = (input ? input.value : '').trim();
+      loadSongOptions(query, true);
     }
 
     function selectSongOption(title) {
-      selectedSongTitle = title;
-      document.getElementById('song-selected-name').innerText = title;
+      const clean = (title || '').trim();
+      if (!clean) return;
+      selectedSongTitle = clean;
+      document.getElementById('song-selected-name').innerText = clean;
       document.getElementById('song-selected-preview').classList.remove('hidden');
       document.getElementById('btn-confirm-set-song').disabled = false;
+    }
+
+    function selectCustomSongTitle(title) {
+      selectSongOption(title);
+    }
+
+    function selectCustomSongFromInput() {
+      const input = document.getElementById('song-custom-input');
+      const val = (input ? input.value : '').trim();
+      if (!val) {
+        showToast({ type: 'warning', title: 'Missing Song Title', message: 'Enter a song title before clicking Use Title.', durationMs: 4000 });
+        return;
+      }
+      selectSongOption(val);
     }
 
     async function confirmSetSong() {
@@ -1374,30 +1782,309 @@ HTML_PAGE = """<!DOCTYPE html>
           body: JSON.stringify({ song_title: selectedSongTitle, artist_name: knownArtistForVideo(videosData.find(item => item.id === activeSongAssistVideoId)) })
         });
         const data = await res.json();
-        if (!data.success) throw new Error(data.error || 'Server error');
+        if (!res.ok || !data.success) throw new Error(data.error || `Server error (${res.status})`);
         const id = activeSongAssistVideoId;
-        closeSongAssistModal();
+        const savedTitle = selectedSongTitle;
+        setVideoMatchFeedback(id, {
+          state: 'matched',
+          title: `Song Set: "${savedTitle}"`,
+          detail: 'Manually confirmed and saved to clip metadata.'
+        });
+        closeSongAssistModal(false);
         await loadData();
         openDrawer(id);
+        showToast({
+          type: 'success',
+          title: 'Song Saved',
+          message: `Assigned "${savedTitle}" and updated YouTube metadata.`,
+          durationMs: 5000
+        });
       } catch (err) {
-        alert('Failed to save song: ' + err.message);
+        showToast({
+          type: 'error',
+          title: 'Failed to Save Song',
+          message: err?.message || String(err),
+          durationMs: 7000
+        });
       } finally {
         btn.innerText = 'Confirm Song';
         btn.disabled = !selectedSongTitle;
       }
     }
 
-    async function triggerSongMatching(id, button) {
-      if (button) { button.disabled = true; button.innerText = 'Matching...'; }
+    async function triggerModalAudioMatch() {
+      if (!activeSongAssistVideoId) return;
+      const id = activeSongAssistVideoId;
+      const btn = document.getElementById('btn-modal-auto-match');
+      const fb = document.getElementById('song-assist-match-feedback');
+      const origHtml = btn ? btn.innerHTML : '';
+
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<svg class="w-3.5 h-3.5 animate-spin text-brand-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg><span>Matching Audio...</span>';
+      }
+      if (fb) {
+        fb.classList.remove('hidden');
+        fb.innerHTML = `
+          <div class="p-3 rounded-xl bg-indigo-950/40 border border-brand-500/30 flex items-center gap-2.5">
+            <svg class="w-4 h-4 text-brand-400 animate-spin shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+            <div>
+              <div class="font-bold text-brand-300 text-[11px]">Analyzing Clip Audio...</div>
+              <div class="text-[11px] text-zinc-300">Checking multiple audio windows with Shazam &amp; Gemini Audio AI.</div>
+            </div>
+          </div>
+        `;
+      }
+
+      const result = await triggerSongMatching(id, null, { suppressAutoOpen: true, fromModal: true });
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+      if (!fb || activeSongAssistVideoId !== id) return;
+
+      if (result.outcome === 'matched' && result.song_title) {
+        selectSongOption(result.song_title);
+        fb.innerHTML = `
+          <div class="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/35 space-y-1">
+            <div class="font-bold text-emerald-300 text-xs">✓ ${escapeHtml(result.message || `Matched "${result.song_title}"`)}</div>
+            <div class="text-[11px] text-zinc-300">Saved to clip! Click <strong>Confirm Song</strong> below to finish, or choose a different title if needed.</div>
+          </div>
+        `;
+      } else if (result.outcome === 'no_match') {
+        fb.innerHTML = `
+          <div class="p-3 rounded-xl bg-amber-950/40 border border-amber-500/35 space-y-1">
+            <div class="font-bold text-amber-300 text-xs">⚠ No Confident Audio Match Found</div>
+            <div class="text-[11px] text-zinc-300 leading-snug">${escapeHtml(result.message || 'Shazam and Gemini AI could not confidently identify the song from this live recording.')}</div>
+            <div class="text-[11px] text-zinc-400">Use the audio scrubber below to listen and search or enter the title manually.</div>
+          </div>
+        `;
+      } else {
+        fb.innerHTML = `
+          <div class="p-3 rounded-xl bg-rose-950/40 border border-rose-500/40 flex items-start justify-between gap-2">
+            <div class="space-y-0.5">
+              <div class="font-bold text-rose-300 text-xs">✕ Audio Match Failed</div>
+              <div class="text-[11px] text-rose-200/90 leading-snug">${escapeHtml(result.error || 'An unexpected error occurred during audio matching.')}</div>
+            </div>
+            <button type="button" onclick="triggerModalAudioMatch()" class="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-100 border border-rose-500/40 text-[10px] font-semibold shrink-0">Retry</button>
+          </div>
+        `;
+      }
+    }
+
+    async function triggerSongMatching(id, button, options = {}) {
+      if (!id) return { outcome: 'error', error: 'No video selected.' };
+      window._userDismissedSongModal = true;
+      const targetVideo = videosData.find(v => v.id === id);
+      const labelName = targetVideo?.filename || id.substring(0, 8);
+      const origHtml = button ? button.innerHTML : '';
+
+      if (button) {
+        button.disabled = true;
+        button.innerHTML = '<span class="inline-flex items-center gap-1.5"><svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg><span>Matching...</span></span>';
+      }
+
+      setVideoMatchFeedback(id, {
+        state: 'matching',
+        title: `Matching audio for ${labelName}...`,
+        detail: 'Extracting multi-window audio clips and querying Shazam + Gemini AI.'
+      });
+      renderCurrentView();
+
       try {
         const res = await fetch(`/api/video/${id}/match`, { method: 'POST' });
-        const data = await res.json();
-        if (!data.success) throw new Error(data.error || 'Server error');
+        let data = {};
+        try {
+          data = await res.json();
+        } catch (_parseErr) {
+          throw new Error(`Server returned invalid JSON (HTTP ${res.status})`);
+        }
+
+        const outcome = data.outcome || (data.matched ? 'matched' : (!res.ok || data.success === false ? 'error' : 'no_match'));
+
+        if (outcome === 'matched') {
+          const msg = data.message || `Matched "${data.song_title}"${data.artist ? ` by ${data.artist}` : ''}.`;
+          setVideoMatchFeedback(id, {
+            state: 'matched',
+            title: `Song Matched: "${data.song_title || 'Identified'}"`,
+            detail: msg
+          });
+          await loadData();
+          if (activeSelectedVideo && activeSelectedVideo.id === id) {
+            openDrawer(id);
+          }
+          showToast({
+            type: 'success',
+            title: `Matched ${labelName}`,
+            message: msg,
+            durationMs: 6500
+          });
+          return { ...data, outcome: 'matched' };
+        }
+
+        if (outcome === 'no_match') {
+          const msg = data.message || 'Checked audio windows with Shazam and Gemini AI, but no confident song match was found.';
+          setVideoMatchFeedback(id, {
+            state: 'no_match',
+            title: 'No Song Match Found',
+            detail: msg
+          });
+          await loadData();
+          if (activeSelectedVideo && activeSelectedVideo.id === id) {
+            openDrawer(id);
+          }
+          showToast({
+            type: 'warning',
+            title: `No Match for ${labelName}`,
+            message: msg,
+            durationMs: 8000
+          });
+          return { ...data, outcome: 'no_match', message: msg };
+        }
+
+        const errMsg = data.error || data.message || `Song matching failed (HTTP ${res.status}).`;
+        setVideoMatchFeedback(id, {
+          state: 'error',
+          title: 'Song Match Failed',
+          detail: errMsg
+        });
         await loadData();
+        if (activeSelectedVideo && activeSelectedVideo.id === id) {
+          openDrawer(id);
+        }
+        showToast({
+          type: 'error',
+          title: `Match Error on ${labelName}`,
+          message: errMsg,
+          durationMs: 9000
+        });
+        return { ...data, outcome: 'error', error: errMsg };
       } catch (err) {
-        alert('Song matching failed: ' + err.message);
+        const errMsg = err?.message || String(err);
+        setVideoMatchFeedback(id, {
+          state: 'error',
+          title: 'Song Match Request Failed',
+          detail: errMsg
+        });
+        renderCurrentView();
+        renderDrawerMatchFeedback(id);
+        showToast({
+          type: 'error',
+          title: `Match Error on ${labelName}`,
+          message: errMsg,
+          durationMs: 9000
+        });
+        return { outcome: 'error', error: errMsg };
       } finally {
-        if (button) { button.disabled = false; button.innerText = 'Try Matching Again'; }
+        if (button && document.body.contains(button)) {
+          button.disabled = false;
+          button.innerHTML = origHtml;
+        }
+      }
+    }
+
+    async function triggerBatchSongMatching(button) {
+      if (isBatchMatchingSongs) return;
+      isBatchMatchingSongs = true;
+      window._userDismissedSongModal = true;
+
+      const batchBtns = [
+        button,
+        document.getElementById('top-btn-match-songs'),
+        document.getElementById('sidebar-btn-match-songs'),
+        document.getElementById('overview-btn-match-songs')
+      ].filter(Boolean);
+      const savedHtml = new Map();
+      batchBtns.forEach(btn => {
+        if (!savedHtml.has(btn)) {
+          savedHtml.set(btn, btn.innerHTML);
+          btn.disabled = true;
+          btn.innerHTML = '<span class="inline-flex items-center gap-1.5"><svg class="w-3.5 h-3.5 animate-spin text-emerald-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg><span>Matching Songs...</span></span>';
+        }
+      });
+
+      const progressToast = showToast({
+        type: 'info',
+        title: 'Running Batch Song Match',
+        message: 'Analyzing unidentified concert clips with Shazam and Gemini Audio AI...',
+        durationMs: 0
+      });
+
+      try {
+        const res = await fetch('/api/match-songs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 25 })
+        });
+        const data = await res.json();
+        if (progressToast && progressToast.parentNode) {
+          progressToast.parentNode.removeChild(progressToast);
+        }
+
+        if (Array.isArray(data.results)) {
+          data.results.forEach(item => {
+            if (!item || !item.video_id) return;
+            if (item.outcome === 'matched') {
+              setVideoMatchFeedback(item.video_id, {
+                state: 'matched',
+                title: `Song Matched: "${item.song_title || 'Identified'}"`,
+                detail: item.message || `Matched "${item.song_title}".`
+              });
+            } else if (item.outcome === 'no_match') {
+              setVideoMatchFeedback(item.video_id, {
+                state: 'no_match',
+                title: 'No Song Match Found',
+                detail: item.message || 'No confident song match returned.'
+              });
+            } else if (item.outcome === 'error') {
+              setVideoMatchFeedback(item.video_id, {
+                state: 'error',
+                title: 'Song Match Failed',
+                detail: item.error || 'Error during audio matching.'
+              });
+            }
+          });
+        }
+
+        await loadData();
+        if (activeSelectedVideo) {
+          openDrawer(activeSelectedVideo.id);
+        }
+
+        const total = data.total_checked || 0;
+        const matched = data.matched_count || 0;
+        const noMatch = data.no_match_count || 0;
+        const errors = data.error_count || 0;
+        const summaryMsg = data.message || `Checked ${total} clip(s): ${matched} matched, ${noMatch} unmatched, ${errors} error(s).`;
+
+        if (total === 0) {
+          showToast({ type: 'info', title: 'No Unidentified Clips', message: summaryMsg, durationMs: 6000 });
+        } else if (errors > 0 && matched === 0) {
+          showToast({ type: 'error', title: 'Batch Song Match Errors', message: summaryMsg, durationMs: 9000 });
+        } else if (matched > 0 && errors === 0 && noMatch === 0) {
+          showToast({ type: 'success', title: 'All Clips Matched!', message: summaryMsg, durationMs: 7000 });
+        } else if (matched > 0) {
+          showToast({ type: 'success', title: 'Batch Song Match Complete', message: summaryMsg, durationMs: 8000 });
+        } else {
+          showToast({ type: 'warning', title: 'No New Song Matches Found', message: summaryMsg, durationMs: 8500 });
+        }
+      } catch (err) {
+        if (progressToast && progressToast.parentNode) {
+          progressToast.parentNode.removeChild(progressToast);
+        }
+        showToast({
+          type: 'error',
+          title: 'Batch Song Match Failed',
+          message: err?.message || String(err),
+          durationMs: 9000
+        });
+      } finally {
+        isBatchMatchingSongs = false;
+        savedHtml.forEach((html, btn) => {
+          btn.disabled = false;
+          btn.innerHTML = html;
+        });
+        updateUnmatchedSongCounters();
       }
     }
 
@@ -1413,6 +2100,7 @@ HTML_PAGE = """<!DOCTYPE html>
         openBandAssistModal(firstNeeding.id);
         return;
       }
+      if (window._userDismissedSongModal) return;
       const songModal = document.getElementById('song-assist-modal');
       if (songModal && !songModal.classList.contains('hidden')) return;
       const firstSongNeeding = pending.find(v => isSongUnmatched(v) && knownArtistForVideo(v));
@@ -1453,6 +2141,7 @@ HTML_PAGE = """<!DOCTYPE html>
         document.getElementById('tab-count-review').innerText = pending;
         document.getElementById('tab-count-catalog').innerText = total;
         document.getElementById('top-approved-count').innerText = approved;
+        updateUnmatchedSongCounters();
 
         // Quota meters
         const used = statusData.uploads_today || 0;
@@ -1502,6 +2191,7 @@ HTML_PAGE = """<!DOCTYPE html>
       activeTab = tab;
       if (enteringReview) {
         window._userDismissedBandModal = false;
+        window._userDismissedSongModal = false;
       }
       const views = ['board', 'review', 'catalog', 'overview'];
       const viewNames = {
@@ -1688,9 +2378,16 @@ HTML_PAGE = """<!DOCTYPE html>
               </div>
             </button>
 
+            ${renderVideoMatchBanner(v.id, true)}
+
             <div class="pt-2 border-t border-border/50 flex items-center justify-between gap-1">
               ${confBadge}
-              <div class="flex items-center gap-1">
+              <div class="flex items-center gap-1 flex-wrap justify-end">
+                ${songUnmatched && colKey !== 'published' ? `
+                  <button type="button" onclick="event.stopPropagation(); triggerSongMatching('${v.id}', this)" title="Run audio song match" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/25 transition">
+                    Match
+                  </button>
+                ` : ''}
                 ${needsBandAssist ? `
                   <button type="button" onclick="event.stopPropagation(); openBandAssistModal('${v.id}')" title="Which band is this?" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 transition">
                     Band?
@@ -1744,11 +2441,13 @@ HTML_PAGE = """<!DOCTYPE html>
       const needingBandList = pending.filter(v => isBandUnmatched(v));
       const needingBandCount = needingBandList.length;
       const firstNeeding = needingBandList[0];
+      const needingSongList = pending.filter(v => isSongUnmatched(v));
+      const needingSongCount = needingSongList.length;
 
       let headerBanner = '';
       if (needingBandCount > 0 && firstNeeding) {
-        headerBanner = `
-          <div class="bg-gradient-to-r from-amber-500/20 via-amber-600/10 to-transparent border border-amber-500/40 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg shadow-amber-500/5 mb-4">
+        headerBanner += `
+          <div class="bg-gradient-to-r from-amber-500/20 via-amber-600/10 to-transparent border border-amber-500/40 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg shadow-amber-500/5 mb-3">
             <div class="flex items-center gap-3">
               <div class="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center flex-shrink-0">
                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
@@ -1756,7 +2455,7 @@ HTML_PAGE = """<!DOCTYPE html>
               <div>
                 <div class="font-bold text-sm text-white flex items-center gap-2">
                   <span>Lineup Identification Required</span>
-                  <span class="px-2 py-0.5 rounded-full text-[10px] bg-amber-500 text-black font-mono font-bold">${needingBandCount} Clip(s)</span>
+                  <span class="px-2 py-0.5 rounded-full text-[10px] bg-amber-500 text-black font-mono font-bold tabular">${needingBandCount} Clip(s)</span>
                 </div>
                 <p class="text-xs text-zinc-300 mt-0.5">Concert is correlated, but the performing band must be selected from the show's roster.</p>
               </div>
@@ -1764,6 +2463,27 @@ HTML_PAGE = """<!DOCTYPE html>
             <button type="button" onclick="openBandAssistModal('${firstNeeding.id}')" class="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-bold text-xs shadow-md shadow-amber-500/25 flex items-center gap-1.5 transition flex-shrink-0 cursor-pointer">
               <span>🎸 Open Band Selection Pop-up</span>
               <span>→</span>
+            </button>
+          </div>
+        `;
+      }
+      if (needingSongCount > 0) {
+        headerBanner += `
+          <div class="bg-card border border-border rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 flex items-center justify-center flex-shrink-0">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+              </div>
+              <div>
+                <div class="font-bold text-sm text-white flex items-center gap-2">
+                  <span>Unidentified Songs in Queue</span>
+                  <span class="px-2 py-0.5 rounded-lg text-[10px] bg-rose-500/15 text-rose-300 border border-rose-500/30 font-mono font-bold tabular">${needingSongCount} Clip(s)</span>
+                </div>
+                <p class="text-xs text-zinc-400 mt-0.5">Trigger multi-window Shazam + Gemini AI song matching across all unidentified clips with explicit outcome reporting.</p>
+              </div>
+            </div>
+            <button type="button" onclick="triggerBatchSongMatching(this)" class="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-semibold text-xs flex items-center gap-1.5 transition flex-shrink-0 cursor-pointer">
+              <span>Match All Unidentified (${needingSongCount})</span>
             </button>
           </div>
         `;
@@ -1891,23 +2611,27 @@ HTML_PAGE = """<!DOCTYPE html>
                   <div class="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                     <div>
                       <div class="text-xs font-bold text-rose-300">StageSync could not identify this song.</div>
-                      <div class="text-[11px] text-zinc-400 mt-0.5">Try the matcher again or choose the title manually.</div>
+                      <div class="text-[11px] text-zinc-400 mt-0.5">Run multi-window audio matching or search &amp; pick the title manually.</div>
                     </div>
                     <div class="flex items-center gap-2 flex-shrink-0">
-                      <button type="button" onclick="triggerSongMatching('${v.id}', this)" class="px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-[11px] font-semibold transition">Try Matching Again</button>
+                      <button type="button" onclick="triggerSongMatching('${v.id}', this)" class="px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-[11px] font-semibold transition">Match Song Audio</button>
                       ${knownArtistForVideo(v) ? `<button type="button" onclick="openSongAssistModal('${v.id}')" class="px-2.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-[11px] font-semibold transition">What song is this?</button>` : ''}
                     </div>
                   </div>
                 ` : ''}
+                ${renderVideoMatchBanner(v.id, false)}
               </div>
             </div>
 
             <!-- Footer Action Bar -->
-            <div class="flex items-center justify-between pt-2 border-t border-border/50">
-              <div class="flex items-center gap-3">
+            <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/50">
+              <div class="flex flex-wrap items-center gap-3">
                 <button onclick="openDrawer('${v.id}')" class="text-xs text-zinc-400 hover:text-brand-300 flex items-center gap-1">
                   <span>View Full Metadata & Setlist</span>
                   <span>→</span>
+                </button>
+                <button type="button" onclick="triggerSongMatching('${v.id}', this)" class="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1">
+                  <span>↻ Re-run Song Match</span>
                 </button>
                 ${needsBandAssist ? `
                   <button onclick="openBandAssistModal('${v.id}')" class="text-xs text-amber-300 hover:text-white font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 transition">
@@ -1977,9 +2701,16 @@ HTML_PAGE = """<!DOCTYPE html>
               </span>
             </td>
             <td class="px-5 py-3.5 text-right font-sans" onclick="event.stopPropagation()">
-              <button onclick="openDrawer('${v.id}')" class="text-xs font-semibold text-zinc-400 hover:text-white px-2 py-1 rounded hover:bg-zinc-800 transition">
-                Inspect
-              </button>
+              <div class="inline-flex items-center justify-end gap-1.5">
+                ${v.processing_status !== 'REJECTED' && v.processing_status !== 'PUBLISHED' ? `
+                  <button type="button" onclick="triggerSongMatching('${v.id}', this)" class="text-xs font-semibold text-emerald-400 hover:text-emerald-300 px-2 py-1 rounded hover:bg-zinc-800 transition">
+                    Match Song
+                  </button>
+                ` : ''}
+                <button onclick="openDrawer('${v.id}')" class="text-xs font-semibold text-zinc-400 hover:text-white px-2 py-1 rounded hover:bg-zinc-800 transition">
+                  Inspect
+                </button>
+              </div>
             </td>
           </tr>
         `;
@@ -2066,6 +2797,7 @@ HTML_PAGE = """<!DOCTYPE html>
       // Pre-fill YouTube form
       const defaultTitle = `${artist} - ${song} (Live at ${venue.name || 'Concert'}, ${c.event_date ? c.event_date.substring(0, 4) : ''})`;
       document.getElementById('drawer-title-input').value = defaultTitle;
+      renderDrawerMatchFeedback(v.id);
 
       // Open drawer panel
       document.getElementById('drawer-backdrop').classList.remove('opacity-0', 'pointer-events-none');
@@ -2127,7 +2859,7 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     async function triggerAction(action) {
-      const btn = document.getElementById(`btn-${action}-action`) || document.getElementById(`sidebar-btn-${action}`);
+      const btn = document.getElementById(`btn-${action}-action`) || document.getElementById(`sidebar-btn-${action}`) || document.getElementById(`top-btn-${action}`);
       let orig = '';
       if (btn) {
         orig = btn.innerHTML;
@@ -2138,9 +2870,34 @@ HTML_PAGE = """<!DOCTYPE html>
       try {
         const res = await fetch(`/api/${action}`, { method: 'POST' });
         const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || `Request failed (HTTP ${res.status})`);
+        }
         await loadData();
+        if (action === 'process') {
+          const count = data.processed_count || 0;
+          showToast({
+            type: count > 0 ? 'success' : 'info',
+            title: count > 0 ? 'AI Processing Complete' : 'No New Unprobed Clips',
+            message: data.message || (count > 0 ? `Processed ${count} pending clip(s).` : 'No unprobed clips were waiting. Click "Match Songs" to re-run audio song matching on unidentified clips.'),
+            durationMs: 7000
+          });
+        } else if (action === 'upload') {
+          const uploaded = data.uploaded_count || 0;
+          showToast({
+            type: uploaded > 0 ? 'success' : 'info',
+            title: uploaded > 0 ? 'YouTube Upload Complete' : 'No Videos Uploaded',
+            message: data.message || (uploaded > 0 ? `Published ${uploaded} approved video(s) to YouTube.` : 'No approved videos were ready or daily upload quota is full.'),
+            durationMs: 6500
+          });
+        }
       } catch (err) {
-        alert(`Action ${action} failed: ` + err);
+        showToast({
+          type: 'error',
+          title: `Action "${action}" Failed`,
+          message: err?.message || String(err),
+          durationMs: 8500
+        });
       } finally {
         if (btn) {
           btn.innerHTML = orig;
@@ -2755,8 +3512,12 @@ HTML_PAGE = """<!DOCTYPE html>
         closeDrawer();
         closeScanModal();
         closeVenueAssistModal();
-        closeBandAssistModal();
-        closeSongAssistModal();
+        if (!document.getElementById('band-assist-modal')?.classList.contains('hidden')) {
+          closeBandAssistModal(true);
+        }
+        if (!document.getElementById('song-assist-modal')?.classList.contains('hidden')) {
+          closeSongAssistModal(true);
+        }
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
@@ -2801,6 +3562,7 @@ def create_app(
     app.router.add_post("/api/video/{id}/set-band", handle_set_video_band)
     app.router.add_post("/api/video/{id}/set-song", handle_set_video_song)
     app.router.add_post("/api/video/{id}/match", handle_trigger_video_match)
+    app.router.add_post("/api/match-songs", handle_trigger_batch_song_match)
     app.router.add_post("/api/scan", handle_trigger_scan)
     app.router.add_post("/api/picker/create", handle_picker_create)
     app.router.add_post("/api/picker/poll", handle_picker_poll)
@@ -2869,13 +3631,68 @@ def serialize_model(obj: Any) -> Any:
     """Safely serialize Pydantic or dictionary models to JSON-compatible dict."""
     if obj is None:
         return None
+    if isinstance(obj, (dict, list, str, int, float, bool)):
+        return obj
     if hasattr(obj, "model_dump"):
-        return obj.model_dump(mode="json")
+        dumped = obj.model_dump(mode="json")
+        if isinstance(dumped, (dict, list, str, int, float, bool)) or dumped is None:
+            return dumped
+        return None
     if hasattr(obj, "to_dict"):
-        return obj.to_dict()
+        dumped = obj.to_dict()
+        if isinstance(dumped, (dict, list, str, int, float, bool)) or dumped is None:
+            return dumped
+        return None
     if hasattr(obj, "dict"):
-        return obj.dict()
+        dumped = obj.dict()
+        if isinstance(dumped, (dict, list, str, int, float, bool)) or dumped is None:
+            return dumped
+        return None
     return obj
+
+
+def _serialize_video_bundle(db: Database, video: Any) -> Optional[Dict[str, Any]]:
+    """Serialize a video along with its identification, concert, venue, and upload records."""
+    if video is None:
+        return None
+    data = serialize_model(video)
+    if not isinstance(data, dict):
+        return data
+
+    video_id = getattr(video, "id", None) or data.get("id")
+    ident = db.get_identification_by_video_id(video_id) if video_id else None
+    ident_data = serialize_model(ident)
+    data["identification"] = ident_data
+
+    concert = None
+    venue = None
+    concert_id = (
+        getattr(ident, "concert_id", None)
+        if ident_data is not None and not isinstance(ident, dict)
+        else (ident_data.get("concert_id") if isinstance(ident_data, dict) else None)
+    )
+    if concert_id and isinstance(concert_id, str):
+        concert = db.get_concert(concert_id)
+    concert_data = serialize_model(concert)
+    venue_id = (
+        getattr(concert, "venue_id", None)
+        if concert_data is not None and not isinstance(concert, dict)
+        else (concert_data.get("venue_id") if isinstance(concert_data, dict) else None)
+    )
+    if venue_id and isinstance(venue_id, str):
+        venue = db.get_venue(venue_id)
+    else:
+        lat = getattr(video, "latitude", None) if hasattr(video, "latitude") else data.get("latitude")
+        lon = getattr(video, "longitude", None) if hasattr(video, "longitude") else data.get("longitude")
+        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)) and lat and lon:
+            venue = db.find_venue_by_coords(lat, lon)
+
+    data["concert"] = concert_data
+    data["venue"] = serialize_model(venue)
+
+    upload = db.get_youtube_upload_by_video_id(video_id) if video_id else None
+    data["upload"] = serialize_model(upload)
+    return data
 
 
 async def handle_list_videos(request: web.Request) -> web.Response:
@@ -2887,30 +3704,7 @@ async def handle_list_videos(request: web.Request) -> web.Response:
     target_status = VideoStatus(status_param) if status_param else None
     videos = db.list_videos(status=target_status, limit=limit)
 
-    results = []
-    for v in videos:
-        data = serialize_model(v)
-        # Embed related identification, concert, venue, and upload
-        ident = db.get_identification_by_video_id(v.id)
-        data["identification"] = serialize_model(ident)
-
-        concert = None
-        venue = None
-        if ident and ident.concert_id:
-            concert = db.get_concert(ident.concert_id)
-        if concert and concert.venue_id:
-            venue = db.get_venue(concert.venue_id)
-        elif v.latitude and v.longitude:
-            venue = db.find_venue_by_coords(v.latitude, v.longitude)
-
-        data["concert"] = serialize_model(concert)
-        data["venue"] = serialize_model(venue)
-
-        upload = db.get_youtube_upload_by_video_id(v.id)
-        data["upload"] = serialize_model(upload)
-
-        results.append(data)
-
+    results = [_serialize_video_bundle(db, v) for v in videos]
     return web.json_response({"videos": results, "count": len(results)})
 
 
@@ -2922,26 +3716,7 @@ async def handle_get_video(request: web.Request) -> web.Response:
     if not video:
         return web.json_response({"error": "Video not found"}, status=404)
 
-    data = serialize_model(video)
-    ident = db.get_identification_by_video_id(video.id)
-    data["identification"] = serialize_model(ident)
-
-    concert = None
-    venue = None
-    if ident and ident.concert_id:
-        concert = db.get_concert(ident.concert_id)
-    if concert and concert.venue_id:
-        venue = db.get_venue(concert.venue_id)
-    elif video.latitude and video.longitude:
-        venue = db.find_venue_by_coords(video.latitude, video.longitude)
-
-    data["concert"] = serialize_model(concert)
-    data["venue"] = serialize_model(venue)
-
-    upload = db.get_youtube_upload_by_video_id(video.id)
-    data["upload"] = serialize_model(upload)
-
-    return web.json_response(data)
+    return web.json_response(_serialize_video_bundle(db, video))
 
 
 async def handle_approve_video(request: web.Request) -> web.Response:
@@ -3152,7 +3927,9 @@ async def handle_song_options(request: web.Request) -> web.Response:
     video_id = request.match_info["id"]
     query = request.query.get("q", "")
     try:
-        return web.json_response(coordinator.get_song_options(video_id, query))
+        data = await asyncio.to_thread(coordinator.get_song_options, video_id, query)
+        status = 502 if data.get("error") else 200
+        return web.json_response(data, status=status)
     except ValueError as exc:
         return web.json_response({"error": str(exc), "songs": []}, status=404)
     except Exception as exc:
@@ -3199,18 +3976,69 @@ async def handle_set_video_song(request: web.Request) -> web.Response:
 
 
 async def handle_trigger_video_match(request: web.Request) -> web.Response:
-    """Re-run the existing local audio matching pipeline for one video."""
+    """Run local multi-window audio song matching for one video and report explicit outcome."""
+    db: Database = request.app[DB_KEY]
     coordinator: PipelineCoordinator = request.app[COORD_KEY]
     video_id = request.match_info["id"]
-    video = request.app[DB_KEY].get_video(video_id)
+    video = db.get_video(video_id)
     if not video:
-        return web.json_response({"success": False, "error": "Video not found"}, status=404)
+        return web.json_response(
+            {"success": False, "matched": False, "outcome": "error", "error": "Video not found"},
+            status=404,
+        )
     try:
-        updated = coordinator.process_video(video)
-        return web.json_response({"success": True, "video": serialize_model(updated)})
+        result = await asyncio.to_thread(coordinator.match_video_song, video_id)
+        payload = dict(result or {})
+        updated_video = payload.get("video") or db.get_video(video_id) or video
+        payload["video"] = _serialize_video_bundle(db, updated_video)
+        is_error = payload.get("outcome") == "error" or not payload.get("success", False)
+        return web.json_response(payload, status=502 if is_error else 200)
+    except ValueError as exc:
+        return web.json_response(
+            {"success": False, "matched": False, "outcome": "error", "error": str(exc)},
+            status=404,
+        )
     except Exception as exc:
         logger.exception("Manual song matching failed for video %s", video_id)
-        return web.json_response({"success": False, "error": str(exc)}, status=500)
+        return web.json_response(
+            {"success": False, "matched": False, "outcome": "error", "error": str(exc)},
+            status=500,
+        )
+
+
+async def handle_trigger_batch_song_match(request: web.Request) -> web.Response:
+    """Run audio song matching across active unidentified videos and report explicit counts."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    body = {}
+    if request.can_read_body:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    try:
+        raw_limit = int(body.get("limit", 25))
+    except (TypeError, ValueError):
+        raw_limit = 25
+    limit = max(1, min(100, raw_limit))
+
+    try:
+        summary = await asyncio.to_thread(coordinator.match_unidentified_songs, limit)
+        status = 200 if summary.get("success", True) else 502
+        return web.json_response(summary, status=status)
+    except Exception as exc:
+        logger.exception("Batch song matching failed: %s", exc)
+        return web.json_response(
+            {
+                "success": False,
+                "checked_count": 0,
+                "matched_count": 0,
+                "no_match_count": 0,
+                "error_count": 1,
+                "error": str(exc),
+                "message": f"Batch song matching failed: {exc}",
+            },
+            status=500,
+        )
 
 
 async def handle_trigger_scan(request: web.Request) -> web.Response:
@@ -3340,25 +4168,43 @@ async def handle_trigger_process(request: web.Request) -> web.Response:
     """Trigger processing of pending candidate videos."""
     coordinator: PipelineCoordinator = request.app[COORD_KEY]
     try:
-        processed = coordinator.process_pending_videos(limit=25)
-        return web.json_response({"success": True, "processed_count": len(processed)})
+        processed = await asyncio.to_thread(coordinator.process_pending_videos, 25)
+        count = len(processed)
+        message = (
+            f"Processed {count} pending video{'s' if count != 1 else ''}."
+            if count
+            else "No pending candidate videos needed processing."
+        )
+        return web.json_response({"success": True, "processed_count": count, "message": message})
     except Exception as e:
         logger.exception("Failed to process videos: %s", e)
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"success": False, "error": str(e)}, status=500)
 
 
 async def handle_trigger_upload(request: web.Request) -> web.Response:
     """Trigger upload of approved videos to YouTube."""
     coordinator: PipelineCoordinator = request.app[COORD_KEY]
     try:
-        results = coordinator.upload_approved_videos()
+        results = await asyncio.to_thread(coordinator.upload_approved_videos)
+        uploaded_count = len([r for r in results if r.success])
+        failed_count = len([r for r in results if not r.success])
+        if uploaded_count and failed_count:
+            message = f"Uploaded {uploaded_count} video{'s' if uploaded_count != 1 else ''}; {failed_count} failed."
+        elif uploaded_count:
+            message = f"Uploaded {uploaded_count} approved video{'s' if uploaded_count != 1 else ''} to YouTube."
+        elif failed_count:
+            message = f"All {failed_count} approved video upload{'s' if failed_count != 1 else ''} failed."
+        else:
+            message = "No approved videos were queued for YouTube upload."
         return web.json_response({
             "success": True,
-            "uploaded_count": len([r for r in results if r.success]),
+            "uploaded_count": uploaded_count,
+            "failed_count": failed_count,
+            "message": message,
         })
     except Exception as e:
         logger.exception("Failed to upload approved videos: %s", e)
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"success": False, "error": str(e)}, status=500)
 
 
 def run_server(

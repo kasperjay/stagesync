@@ -25,6 +25,8 @@ class AcousticMatchResult(BaseModel):
     album: Optional[str] = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     fingerprint_service: str = "shazamio"
+    unavailable: bool = False
+    error: Optional[str] = None
     raw_payload: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -47,17 +49,30 @@ class ShazamMatcher:
 
         if not self._has_shazamio:
             logger.debug("shazamio not available; returning unmatched result.")
-            return AcousticMatchResult(matched=False, confidence=0.0)
+            return AcousticMatchResult(
+                matched=False,
+                confidence=0.0,
+                unavailable=True,
+                error="Shazamio package is not installed in the runtime environment.",
+            )
 
         try:
             from shazamio import Shazam
 
             shazam = Shazam()
-            out = await shazam.recognize_song(str(path))
+            recognize_fn = getattr(shazam, "recognize", None) or getattr(shazam, "recognize_song", None)
+            if recognize_fn is None:
+                raise AttributeError("Shazam client has neither 'recognize' nor 'recognize_song'")
+            out = await recognize_fn(str(path))
             return self.parse_shazam_payload(out)
         except Exception as e:
             logger.warning("Shazam recognition failed on %s: %s", path, e)
-            return AcousticMatchResult(matched=False, confidence=0.0, raw_payload={"error": str(e)})
+            return AcousticMatchResult(
+                matched=False,
+                confidence=0.0,
+                error=str(e),
+                raw_payload={"error": str(e)},
+            )
 
     def recognize(self, audio_path: Union[str, Path]) -> AcousticMatchResult:
         """Synchronous wrapper for acoustic recognition."""

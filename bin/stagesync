@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/home/workspace/stagesync/.venv/bin/python3
 """StageSync CLI Launcher script."""
 import sys
 from pathlib import Path

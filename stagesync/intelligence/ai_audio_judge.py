@@ -31,12 +31,27 @@ class AIAudioJudgeResult(BaseModel):
     setlist_index: Optional[int] = None
     lyrics_detected: Optional[str] = None
     reasoning: Optional[str] = None
+    error: Optional[str] = None
     service: str = "gemini_multimodal"
     raw_payload: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AIAudioJudge:
     """Evaluates noisy live audio against a concert's setlist using Gemini Flash."""
+
+    _PLACEHOLDER_TITLES = {
+        "unidentifiable",
+        "unknown",
+        "none",
+        "null",
+        "n/a",
+        "live performance",
+        "unidentified",
+        "unidentified song",
+        "unidentified clip",
+        "instrumental",
+        "clip",
+    }
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None) -> None:
         settings = get_settings()
@@ -50,6 +65,7 @@ class AIAudioJudge:
         artist_name: str,
         venue_name: str = "Live Venue",
         event_date: str = "",
+        allow_open_catalog: bool = False,
     ) -> AIAudioJudgeResult:
         """Identify which setlist track matches the 30-second audio recording."""
         path = Path(audio_path).resolve()
@@ -58,11 +74,23 @@ class AIAudioJudge:
 
         if not self.api_key:
             logger.info("GEMINI_API_KEY not configured; using heuristic setlist fallback.")
-            return self._heuristic_fallback(candidate_songs, reason="AI judge key not configured; setlist available for manual selection.")
+            return self._heuristic_fallback(
+                candidate_songs,
+                reason="AI judge key not configured; setlist available for manual selection.",
+                error="GEMINI_API_KEY is not configured.",
+            )
 
-        if not candidate_songs and not artist_name:
-            logger.info("Neither setlist songs nor artist name provided; skipping AI audio judge.")
-            return AIAudioJudgeResult(matched=False, confidence=0.0, reasoning="No artist or candidate songs provided.")
+        usable_artist = (artist_name or "").strip()
+        if usable_artist.casefold() in {"", "live artist", "unknown artist", "unknown"}:
+            usable_artist = ""
+
+        if not candidate_songs and not (allow_open_catalog and usable_artist):
+            logger.info("No candidate songs provided (open catalog disabled or artist unknown); skipping AI audio judge.")
+            return AIAudioJudgeResult(
+                matched=False,
+                confidence=0.0,
+                reasoning="No setlist songs available for this concert.",
+            )
 
         # Build prompt listing the candidate setlist songs or artist catalog instruction
         if candidate_songs:
@@ -85,7 +113,7 @@ class AIAudioJudge:
             f"The artist performing is {artist_name}.\n"
             f"{setlist_context}\n\n"
             f"Listen to the audio snippet (vocals, guitar riffs, drum beats, lyrics sung, bassline).\n"
-            f"Identify which song is being performed.\n"
+            f"Identify which song is being performed. If the song cannot be confidently identified, set song_title to \"\" and confidence below 0.5 and explain why in reasoning.\n"
             f"Output JSON format strictly conforming to:\n"
             f'{{\n  "song_title": "string",\n  "confidence": 0.0 to 1.0,\n  "setlist_index": 1,\n  "lyrics_detected": "string",\n  "reasoning": "string"\n}}'
         )
@@ -124,14 +152,19 @@ class AIAudioJudge:
 
             candidates = data.get("candidates", [])
             if candidates:
-                text_part = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                parts = candidates[0].get("content", {}).get("parts") or [{}]
+                text_part = parts[0].get("text", "") if parts else ""
                 return self._parse_gemini_json(text_part, candidate_songs, data)
+
+            return self._heuristic_fallback(
+                candidate_songs,
+                reason="Gemini returned an empty candidate response.",
+            )
 
         except Exception as e:
             logger.warning("Gemini AI audio judge request failed: %s", e)
-            return self._heuristic_fallback(candidate_songs, reason=f"Gemini API request error: {e}")
-
-        return self._heuristic_fallback(candidate_songs)
+            err_msg = f"Gemini API request error: {e}"
+            return self._heuristic_fallback(candidate_songs, reason=err_msg, error=err_msg)
 
     def _parse_gemini_json(
         self,
@@ -142,7 +175,7 @@ class AIAudioJudge:
         """Parse structured JSON from model response."""
         try:
             # Clean markdown codeblocks if present
-            cleaned = json_str.strip()
+            cleaned = (json_str or "").strip()
             if cleaned.startswith("```json"):
                 cleaned = cleaned[7:]
             if cleaned.startswith("```"):
@@ -151,15 +184,19 @@ class AIAudioJudge:
                 cleaned = cleaned[:-3]
             data = json.loads(cleaned.strip())
 
-            title = data.get("song_title", "").strip()
-            confidence = float(data.get("confidence", 0.0))
+            raw_title = data.get("song_title")
+            title = str(raw_title).strip() if raw_title is not None else ""
+            raw_conf = data.get("confidence")
+            confidence = max(0.0, min(1.0, float(raw_conf))) if raw_conf is not None else 0.0
             setlist_index = data.get("setlist_index")
             lyrics = data.get("lyrics_detected")
             reasoning = data.get("reasoning")
 
+            is_placeholder = not title or title.casefold() in self._PLACEHOLDER_TITLES
+
             # Check if title matches one of the candidate songs
             matched = False
-            if candidate_songs:
+            if not is_placeholder and candidate_songs:
                 for idx, c in enumerate(candidate_songs):
                     if c.lower() == title.lower() or c.lower() in title.lower():
                         matched = True
@@ -168,30 +205,37 @@ class AIAudioJudge:
                         break
 
             # If no setlist candidate matched (or setlist was empty), allow high confidence identification
-            if not matched and confidence >= 0.70 and title and title.lower() not in ("unidentifiable", "unknown", "none"):
+            if not matched and not is_placeholder and confidence >= 0.70:
                 matched = True
 
             return AIAudioJudgeResult(
                 matched=matched,
                 song_title=title if matched else None,
                 confidence=confidence if matched else 0.0,
-                setlist_index=setlist_index,
+                setlist_index=setlist_index if matched else None,
                 lyrics_detected=lyrics,
-                reasoning=reasoning,
+                reasoning=reasoning or ("Audio could not be confidently matched to a song." if not matched else None),
                 service="gemini_multimodal",
                 raw_payload=raw_payload,
             )
         except Exception as e:
             logger.warning("Failed to parse Gemini output: %s", e)
-            return self._heuristic_fallback(candidate_songs, reason=f"Failed to parse Gemini output: {e}")
+            err_msg = f"Failed to parse Gemini output: {e}"
+            return self._heuristic_fallback(candidate_songs, reason=err_msg, error=err_msg)
 
-    def _heuristic_fallback(self, candidate_songs: List[str], reason: Optional[str] = None) -> AIAudioJudgeResult:
+    def _heuristic_fallback(
+        self,
+        candidate_songs: List[str],
+        reason: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> AIAudioJudgeResult:
         """Fallback when Gemini is unavailable or not configured."""
         if not candidate_songs:
             return AIAudioJudgeResult(
                 matched=False,
                 confidence=0.0,
                 reasoning=reason or "No candidates available for identification.",
+                error=error,
             )
         # Without model, cannot reliably pick from candidates without acoustic signature
         default_reason = (
@@ -203,4 +247,5 @@ class AIAudioJudge:
             matched=False,
             confidence=0.0,
             reasoning=reason or default_reason,
+            error=error,
         )

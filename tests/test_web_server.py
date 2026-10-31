@@ -405,16 +405,140 @@ class TestWebServer(AioHTTPTestCase):
         )
 
     async def test_manual_video_match_endpoint(self):
-        """Verify the review queue can explicitly rerun matching for one video."""
+        """Verify the review queue can explicitly rerun song matching for one video and receive rich outcome."""
         fake_video = Video(id="v_100", source_photo_id="sp_100", filename="clip.mov")
         self.mock_db.get_video.return_value = fake_video
-        self.mock_coord.process_video.return_value = fake_video
+        self.mock_coord.match_video_song.return_value = {
+            "success": True,
+            "matched": True,
+            "outcome": "matched",
+            "song_title": "Dragon",
+            "artist": "King Gizzard",
+            "confidence": 0.94,
+            "service": "shazam",
+            "message": 'Matched "Dragon" by King Gizzard (94% confidence via shazam).',
+            "error": None,
+            "diagnostics": {"windows_checked": 1},
+            "video": fake_video,
+        }
 
         resp = await self.client.post("/api/video/v_100/match")
         self.assertEqual(resp.status, 200)
         data = await resp.json()
         self.assertTrue(data["success"])
-        self.mock_coord.process_video.assert_called_once_with(fake_video)
+        self.assertTrue(data["matched"])
+        self.assertEqual(data["outcome"], "matched")
+        self.assertEqual(data["song_title"], "Dragon")
+        self.assertEqual(data["video"]["id"], "v_100")
+        self.mock_coord.match_video_song.assert_called_once_with("v_100")
+
+    async def test_manual_video_match_no_match_and_error_outcomes(self):
+        """Verify /api/video/{id}/match surfaces explicit no-match (200) and error (502) payloads instead of failing silently."""
+        fake_video = Video(id="v_100", source_photo_id="sp_100", filename="clip.mov")
+        self.mock_db.get_video.return_value = fake_video
+
+        # No-match outcome
+        self.mock_coord.match_video_song.return_value = {
+            "success": True,
+            "matched": False,
+            "outcome": "no_match",
+            "song_title": None,
+            "artist": "Gideon",
+            "confidence": 0.12,
+            "service": "gemini_audio",
+            "message": "No song match found across 3 audio windows. Crowd noise obscured vocals.",
+            "error": None,
+            "diagnostics": {"windows_checked": 3},
+            "video": fake_video,
+        }
+        resp = await self.client.post("/api/video/v_100/match")
+        self.assertEqual(resp.status, 200)
+        no_match_data = await resp.json()
+        self.assertTrue(no_match_data["success"])
+        self.assertFalse(no_match_data["matched"])
+        self.assertEqual(no_match_data["outcome"], "no_match")
+        self.assertIn("No song match found", no_match_data["message"])
+
+        # Error outcome returns HTTP 502 with error details
+        self.mock_coord.match_video_song.return_value = {
+            "success": False,
+            "matched": False,
+            "outcome": "error",
+            "song_title": None,
+            "artist": "Gideon",
+            "confidence": 0.0,
+            "service": "none",
+            "message": "Local video file is missing on disk; download or re-scan the clip before matching.",
+            "error": "Local video file is missing on disk; download or re-scan the clip before matching.",
+            "diagnostics": {"windows_checked": 0},
+            "video": fake_video,
+        }
+        err_resp = await self.client.post("/api/video/v_100/match")
+        self.assertEqual(err_resp.status, 502)
+        err_data = await err_resp.json()
+        self.assertFalse(err_data["success"])
+        self.assertEqual(err_data["outcome"], "error")
+        self.assertIn("missing on disk", err_data["error"])
+
+    async def test_batch_song_match_endpoint(self):
+        """Verify POST /api/match-songs triggers batch unidentified song matching and returns summary counts."""
+        self.mock_coord.match_unidentified_songs.return_value = {
+            "success": True,
+            "checked_count": 3,
+            "matched_count": 2,
+            "no_match_count": 1,
+            "error_count": 0,
+            "message": "Checked 3 unidentified clips: 2 matched, 1 had no confident match.",
+            "results": [
+                {"video_id": "v_1", "outcome": "matched", "song_title": "Bite Down"},
+                {"video_id": "v_2", "outcome": "matched", "song_title": "No Love/No One"},
+                {"video_id": "v_3", "outcome": "no_match", "song_title": None},
+            ],
+        }
+        resp = await self.client.post("/api/match-songs", json={"limit": 10})
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["checked_count"], 3)
+        self.assertEqual(data["matched_count"], 2)
+        self.assertEqual(data["no_match_count"], 1)
+        self.mock_coord.match_unidentified_songs.assert_called_once_with(10)
+
+    async def test_song_options_error_returns_502(self):
+        """Verify GET /api/video/{id}/song-options surfaces MusicBrainz errors with HTTP 502 instead of silent empty 200."""
+        self.mock_coord.get_song_options.return_value = {
+            "artist_name": "Gideon",
+            "source": "error",
+            "songs": [],
+            "error": "MusicBrainz discography search failed: connection timed out",
+            "message": "MusicBrainz discography search failed: connection timed out",
+        }
+        resp = await self.client.get("/api/video/v_100/song-options?q=Bite")
+        self.assertEqual(resp.status, 502)
+        data = await resp.json()
+        self.assertEqual(data["source"], "error")
+        self.assertIn("MusicBrainz discography search failed", data["error"])
+
+    async def test_manual_song_match_ui_controls_and_feedback(self):
+        """Verify dashboard HTML includes manual song match triggers, toast feedback, and status banners."""
+        resp = await self.client.get("/")
+        self.assertEqual(resp.status, 200)
+        text = await resp.text()
+
+        self.assertIn('id="toast-container"', text)
+        self.assertIn('id="top-btn-match-songs"', text)
+        self.assertIn('id="sidebar-btn-match-songs"', text)
+        self.assertIn('id="overview-btn-match-songs"', text)
+        self.assertIn('id="drawer-btn-match-song"', text)
+        self.assertIn('id="drawer-match-feedback"', text)
+        self.assertIn('id="btn-modal-auto-match"', text)
+        self.assertIn('id="song-assist-match-feedback"', text)
+        self.assertIn('id="btn-song-search"', text)
+        self.assertIn('id="song-search-status-banner"', text)
+        self.assertIn("triggerBatchSongMatching", text)
+        self.assertIn("triggerModalAudioMatch", text)
+        self.assertIn("runManualSongSearch", text)
+        self.assertIn("renderVideoMatchBanner", text)
 
     async def test_song_assist_modal_playback_progress_bar(self):
         """Verify the song selection modal contains an interactive playback progress bar and seeking controls."""
