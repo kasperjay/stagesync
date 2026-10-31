@@ -42,6 +42,11 @@ class TestWebServer(AioHTTPTestCase):
         self.assertIn("venue-assist-refresh", text)
         self.assertIn("band-assist-refresh", text)
         self.assertIn("refreshVideoStill", text)
+        self.assertIn("const songUnmatched = isSongUnmatched(v);", text)
+        self.assertIn("const needsSongAssist = songUnmatched && Boolean(knownArtistForVideo(v));", text)
+        self.assertIn("const needsVenueAssist = !hasKnownVenue;", text)
+        self.assertIn("${needsVenueAssist ? `", text)
+        self.assertIn("${needsSongAssist ? `", text)
 
     async def test_get_status_json(self):
         """Verify /api/status returns valid system statistics."""
@@ -54,7 +59,13 @@ class TestWebServer(AioHTTPTestCase):
             recorded_at_utc="2024-08-15T21:00:00Z",
             processing_status=VideoStatus.PENDING_REVIEW,
         )
-        self.mock_db.list_videos.return_value = [fake_video]
+        rejected_video = Video(
+            source_photo_id="sp_rejected",
+            filename="IMG_1058.MOV",
+            duration_seconds=2.0,
+            processing_status=VideoStatus.REJECTED,
+        )
+        self.mock_db.list_videos.return_value = [fake_video, rejected_video]
         self.mock_db.get_todays_upload_count.return_value = 1
         self.mock_coord.photos_client.is_authenticated.return_value = True
         self.mock_coord.drive_client.is_authenticated.return_value = True
@@ -64,6 +75,7 @@ class TestWebServer(AioHTTPTestCase):
         self.assertEqual(resp.status, 200)
         data = await resp.json()
         self.assertEqual(data["total_videos"], 1)
+        self.assertEqual(data["status_counts"]["REJECTED"], 1)
         self.assertEqual(data["uploads_today"], 1)
         self.assertTrue(data["services"]["google_photos"]["authenticated"])
         self.assertTrue(data["services"]["google_drive"]["authenticated"])
@@ -403,6 +415,30 @@ class TestWebServer(AioHTTPTestCase):
         data = await resp.json()
         self.assertTrue(data["success"])
         self.mock_coord.process_video.assert_called_once_with(fake_video)
+
+    async def test_song_assist_modal_playback_progress_bar(self):
+        """Verify the song selection modal contains an interactive playback progress bar and seeking controls."""
+        resp = await self.client.get("/")
+        self.assertEqual(resp.status, 200)
+        text = await resp.text()
+
+        # Modal elements
+        self.assertIn('id="song-assist-progress"', text)
+        self.assertIn('id="song-assist-time-display"', text)
+        self.assertIn('id="song-assist-audio"', text)
+        self.assertIn('type="range"', text)
+
+        # Quick seek buttons
+        self.assertIn("seekSongAssistRelative(-10)", text)
+        self.assertIn("seekSongAssistRelative(10)", text)
+
+        # Interactive seeking handlers & time formatters
+        self.assertIn("onSongAssistSeekInput", text)
+        self.assertIn("onSongAssistSeekChange", text)
+        self.assertIn("formatAudioTime", text)
+        self.assertIn("updateSongAssistTimeDisplay", text)
+        self.assertIn("isSongAssistScrubbing", text)
+
 
 
 if __name__ == "__main__":

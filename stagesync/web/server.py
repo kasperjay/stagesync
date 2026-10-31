@@ -86,6 +86,15 @@ HTML_PAGE = """<!DOCTYPE html>
     .drawer-panel {
       transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
     }
+    input[type="range"]#song-assist-progress {
+      accent-color: #6366f1;
+    }
+    input[type="range"]#song-assist-progress::-webkit-slider-thumb {
+      cursor: pointer;
+    }
+    input[type="range"]#song-assist-progress::-moz-range-thumb {
+      cursor: pointer;
+    }
   </style>
 </head>
 <body class="bg-canvas text-zinc-100 min-h-screen antialiased flex overflow-x-hidden selection:bg-brand-500 selection:text-white">
@@ -1013,14 +1022,39 @@ HTML_PAGE = """<!DOCTYPE html>
         <div id="song-assist-file" class="font-mono text-zinc-200 truncate">video.mov</div>
         <div id="song-assist-artist" class="text-brand-400">Artist not selected</div>
       </div>
-      <div class="bg-canvas border border-border rounded-xl p-3 flex items-center gap-3">
-        <button type="button" id="song-assist-play" onclick="toggleSongAssistPlayback()" class="w-10 h-10 rounded-full bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center transition shadow-md shadow-brand-500/20" aria-label="Play audio clip">
-          <span id="song-assist-play-icon" class="text-base leading-none">▶</span>
-        </button>
-        <div class="min-w-0 flex-1">
-          <div id="song-assist-play-label" class="text-xs font-semibold text-zinc-100">Listen to this clip</div>
-          <div id="song-assist-play-status" class="text-[10px] text-zinc-500 mt-0.5">Play the video audio while choosing a title.</div>
+      <div class="bg-canvas border border-border rounded-xl p-3.5 space-y-2.5">
+        <div class="flex items-center gap-3">
+          <button type="button" id="song-assist-play" onclick="toggleSongAssistPlayback()" class="w-10 h-10 shrink-0 rounded-full bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center transition shadow-md shadow-brand-500/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400" aria-label="Play audio clip">
+            <span id="song-assist-play-icon" class="text-base leading-none">▶</span>
+          </button>
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center justify-between gap-2">
+              <span id="song-assist-play-label" class="text-xs font-semibold text-zinc-100 truncate">Listen to this clip</span>
+              <span id="song-assist-time-display" class="font-mono text-[11px] text-zinc-400 tabular shrink-0">0:00 / 0:00</span>
+            </div>
+            <div id="song-assist-play-status" class="text-[10px] text-zinc-500 mt-0.5 truncate">Skip through audio to identify the song.</div>
+          </div>
         </div>
+
+        <div class="space-y-1">
+          <div class="flex items-center gap-2">
+            <button type="button" onclick="seekSongAssistRelative(-10)" class="px-2 py-1 rounded-md bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 hover:text-white text-[10px] font-mono border border-border transition shrink-0" title="Rewind 10 seconds" aria-label="Rewind 10 seconds">-10s</button>
+            <input 
+              type="range" 
+              id="song-assist-progress" 
+              min="0" 
+              max="100" 
+              value="0" 
+              step="0.1" 
+              class="flex-1 h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-brand-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+              oninput="onSongAssistSeekInput(this.value)"
+              onchange="onSongAssistSeekChange(this.value)"
+              aria-label="Audio playback progress"
+            />
+            <button type="button" onclick="seekSongAssistRelative(10)" class="px-2 py-1 rounded-md bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 hover:text-white text-[10px] font-mono border border-border transition shrink-0" title="Forward 10 seconds" aria-label="Forward 10 seconds">+10s</button>
+          </div>
+        </div>
+
         <audio id="song-assist-audio" preload="metadata" class="hidden"></audio>
       </div>
       <div class="space-y-2">
@@ -1066,27 +1100,6 @@ HTML_PAGE = """<!DOCTYPE html>
       return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
     }
 
-    function isUnidentifiedSong(v) {
-      if (!v) return false;
-      const c = v.concert;
-      if (!c) return false;
-      const ident = v.identification || {};
-
-      // If user has already selected the band for this video, do not re-prompt
-      if (ident.status === 'USER_ASSISTED_BAND' || ident.fingerprint_service === 'user_assisted_band') {
-        return false;
-      }
-
-      const song = (ident.detected_song_title || '').trim().toLowerCase();
-      const unassigned = !song || song === 'live performance' || song === 'unidentified clip' || song === 'unidentified song' || song === 'unknown' || song === 'unidentified' || song === 'instrumental' || song === 'clip';
-      const lowConf = !ident.match_confidence || ident.match_confidence < 0.50;
-      const artist = (ident.detected_artist || '').trim().toLowerCase();
-      const artistUnknown = !artist || ['live artist', 'unknown artist', 'unknown'].includes(artist);
-
-      const hasLineupOrHeadliner = Boolean(c.headliner_artist || (c.lineup_artists && c.lineup_artists.length > 0));
-      return artistUnknown && (unassigned || lowConf) && hasLineupOrHeadliner;
-    }
-
     function isSongUnmatched(v) {
       if (!v) return false;
       const ident = v.identification || {};
@@ -1102,6 +1115,11 @@ HTML_PAGE = """<!DOCTYPE html>
       return ['live artist', 'unknown artist', 'unknown'].includes(artist.trim().toLowerCase()) ? '' : artist;
     }
 
+    function isVenueUnmatched(v) {
+      const venue = v?.venue;
+      return !venue || !venue.name || venue.name.startsWith('Venue near');
+    }
+
     function getShowBands(v) {
       if (!v) return [];
       const c = v.concert;
@@ -1113,9 +1131,29 @@ HTML_PAGE = """<!DOCTYPE html>
       return list.length > 0 ? list : (c.headliner_artist ? [c.headliner_artist] : []);
     }
 
+    function isBandUnmatched(v) {
+      return Boolean(v?.concert && !knownArtistForVideo(v) && getShowBands(v).length > 0);
+    }
+
     let activeSongAssistVideoId = null;
     let selectedSongTitle = null;
     let songSearchTimer = null;
+    let isSongAssistScrubbing = false;
+
+    function formatAudioTime(sec) {
+      if (isNaN(sec) || sec === null || sec === undefined || sec < 0) return '0:00';
+      const totalSec = Math.floor(sec);
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      return `${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+    function updateSongAssistTimeDisplay(current, total) {
+      const display = document.getElementById('song-assist-time-display');
+      if (display) {
+        display.innerText = `${formatAudioTime(current)} / ${formatAudioTime(total)}`;
+      }
+    }
 
     function openSongAssistModal(id) {
       const v = videosData.find(item => item.id === id);
@@ -1127,15 +1165,29 @@ HTML_PAGE = """<!DOCTYPE html>
       }
       activeSongAssistVideoId = id;
       selectedSongTitle = null;
+      isSongAssistScrubbing = false;
+
       document.getElementById('song-assist-file').innerText = v.filename || 'video.mov';
       document.getElementById('song-assist-artist').innerText = artist;
+
       const audio = document.getElementById('song-assist-audio');
-      audio.pause();
-      audio.currentTime = 0;
-      audio.src = `/api/video/${id}/audio`;
+      if (audio) {
+        audio.pause();
+        audio.currentTime = 0;
+        audio.src = `/api/video/${id}/audio`;
+      }
+
+      const totalDuration = (v.duration_seconds && v.duration_seconds > 0) ? v.duration_seconds : 0;
+      const progress = document.getElementById('song-assist-progress');
+      if (progress) {
+        progress.value = 0;
+        progress.max = totalDuration > 0 ? totalDuration : 100;
+      }
+      updateSongAssistTimeDisplay(0, totalDuration);
+
       document.getElementById('song-assist-play-icon').innerText = '▶';
       document.getElementById('song-assist-play-label').innerText = 'Listen to this clip';
-      document.getElementById('song-assist-play-status').innerText = 'Play the video audio while choosing a title.';
+      document.getElementById('song-assist-play-status').innerText = 'Skip through audio to identify the song.';
       document.getElementById('song-assist-search').value = '';
       document.getElementById('song-selected-preview').classList.add('hidden');
       document.getElementById('btn-confirm-set-song').disabled = true;
@@ -1153,6 +1205,12 @@ HTML_PAGE = """<!DOCTYPE html>
         audio.removeAttribute('src');
         audio.load();
       }
+      const progress = document.getElementById('song-assist-progress');
+      if (progress) {
+        progress.value = 0;
+      }
+      updateSongAssistTimeDisplay(0, 0);
+      isSongAssistScrubbing = false;
       activeSongAssistVideoId = null;
       selectedSongTitle = null;
     }
@@ -1165,7 +1223,7 @@ HTML_PAGE = """<!DOCTYPE html>
           await audio.play();
           document.getElementById('song-assist-play-icon').innerText = 'Ⅱ';
           document.getElementById('song-assist-play-label').innerText = 'Playing clip';
-          document.getElementById('song-assist-play-status').innerText = 'Listen for the song, then choose its title below.';
+          document.getElementById('song-assist-play-status').innerText = 'Skip around to find recognizable vocals or riffs.';
         } else {
           audio.pause();
           document.getElementById('song-assist-play-icon').innerText = '▶';
@@ -1176,10 +1234,90 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
-    document.getElementById('song-assist-audio')?.addEventListener('ended', () => {
-      document.getElementById('song-assist-play-icon').innerText = '▶';
-      document.getElementById('song-assist-play-label').innerText = 'Listen again';
-    });
+    function onSongAssistSeekInput(val) {
+      isSongAssistScrubbing = true;
+      const audio = document.getElementById('song-assist-audio');
+      const total = (audio && audio.duration && isFinite(audio.duration)) ? audio.duration : (Number(document.getElementById('song-assist-progress')?.max) || 0);
+      const target = Number(val);
+      updateSongAssistTimeDisplay(target, total);
+      document.getElementById('song-assist-play-status').innerText = `Jump to ${formatAudioTime(target)}`;
+    }
+
+    function onSongAssistSeekChange(val) {
+      const target = Number(val);
+      const audio = document.getElementById('song-assist-audio');
+      if (audio) {
+        audio.currentTime = target;
+      }
+      isSongAssistScrubbing = false;
+      if (audio) {
+        const total = (audio.duration && isFinite(audio.duration)) ? audio.duration : target;
+        updateSongAssistTimeDisplay(target, total);
+        document.getElementById('song-assist-play-status').innerText = audio.paused ? `Paused at ${formatAudioTime(target)}` : `Playing from ${formatAudioTime(target)}`;
+      }
+    }
+
+    function seekSongAssistRelative(deltaSec) {
+      const audio = document.getElementById('song-assist-audio');
+      if (!audio) return;
+      const progress = document.getElementById('song-assist-progress');
+      const total = (audio.duration && isFinite(audio.duration)) ? audio.duration : (progress ? Number(progress.max) : 0);
+      const current = isNaN(audio.currentTime) ? 0 : audio.currentTime;
+      const maxBound = total > 0 ? total : 999999;
+      const target = Math.max(0, Math.min(maxBound, current + deltaSec));
+      audio.currentTime = target;
+      if (progress) progress.value = target;
+      updateSongAssistTimeDisplay(target, total);
+      document.getElementById('song-assist-play-status').innerText = `Jumped ${deltaSec > 0 ? '+' : ''}${deltaSec}s (${formatAudioTime(target)})`;
+    }
+
+    const songAssistAudioEl = document.getElementById('song-assist-audio');
+    if (songAssistAudioEl) {
+      songAssistAudioEl.addEventListener('loadedmetadata', () => {
+        const progress = document.getElementById('song-assist-progress');
+        if (progress && songAssistAudioEl.duration && isFinite(songAssistAudioEl.duration) && songAssistAudioEl.duration > 0) {
+          progress.max = songAssistAudioEl.duration;
+          updateSongAssistTimeDisplay(songAssistAudioEl.currentTime, songAssistAudioEl.duration);
+        }
+      });
+
+      songAssistAudioEl.addEventListener('timeupdate', () => {
+        if (!isSongAssistScrubbing) {
+          const progress = document.getElementById('song-assist-progress');
+          if (progress) {
+            progress.value = songAssistAudioEl.currentTime;
+          }
+          const total = (songAssistAudioEl.duration && isFinite(songAssistAudioEl.duration)) ? songAssistAudioEl.duration : (progress ? Number(progress.max) : 0);
+          updateSongAssistTimeDisplay(songAssistAudioEl.currentTime, total);
+        }
+      });
+
+      songAssistAudioEl.addEventListener('play', () => {
+        document.getElementById('song-assist-play-icon').innerText = 'Ⅱ';
+        document.getElementById('song-assist-play-label').innerText = 'Playing clip';
+      });
+
+      songAssistAudioEl.addEventListener('pause', () => {
+        if (!songAssistAudioEl.ended) {
+          document.getElementById('song-assist-play-icon').innerText = '▶';
+          document.getElementById('song-assist-play-label').innerText = 'Listen to this clip';
+        }
+      });
+
+      songAssistAudioEl.addEventListener('ended', () => {
+        document.getElementById('song-assist-play-icon').innerText = '▶';
+        document.getElementById('song-assist-play-label').innerText = 'Listen again';
+        const progress = document.getElementById('song-assist-progress');
+        if (progress) {
+          progress.value = progress.max;
+        }
+        isSongAssistScrubbing = false;
+      });
+
+      songAssistAudioEl.addEventListener('error', () => {
+        document.getElementById('song-assist-play-status').innerText = 'Audio could not be played for this video.';
+      });
+    }
 
     async function loadSongOptions(query) {
       if (!activeSongAssistVideoId) return;
@@ -1269,7 +1407,7 @@ HTML_PAGE = """<!DOCTYPE html>
       const modal = document.getElementById('band-assist-modal');
       if (modal && !modal.classList.contains('hidden')) return;
       const pending = (videosData || []).filter(v => v.processing_status === 'PENDING_REVIEW');
-      const firstNeeding = pending.find(v => isUnidentifiedSong(v));
+      const firstNeeding = pending.find(v => isBandUnmatched(v));
       if (firstNeeding) {
         console.log('[StageSync] Auto-prompting band selection modal for video:', firstNeeding.id, firstNeeding.filename);
         openBandAssistModal(firstNeeding.id);
@@ -1494,8 +1632,26 @@ HTML_PAGE = """<!DOCTYPE html>
         const venue = v.venue ? `${v.venue.name}, ${v.venue.city}` : 'No venue detected';
         const conf = ident.match_confidence ? Math.round(ident.match_confidence * 100) : 0;
         const durStr = formatDuration(v.duration_seconds);
-        const hasKnownVenue = v.venue && v.venue.name && !v.venue.name.startsWith('Venue near');
-        const needsBandAssist = isUnidentifiedSong(v);
+        const hasKnownVenue = !isVenueUnmatched(v);
+        const needsBandAssist = isBandUnmatched(v);
+        const songUnmatched = isSongUnmatched(v);
+        const needsSongAssist = songUnmatched && Boolean(knownArtistForVideo(v));
+        const needsVenueAssist = !hasKnownVenue;
+        const primaryAssist = needsBandAssist ? 'band' : needsSongAssist ? 'song' : needsVenueAssist ? 'venue' : 'drawer';
+        const primaryAssistAction = primaryAssist === 'band'
+          ? `openBandAssistModal('${v.id}')`
+          : primaryAssist === 'song'
+            ? `openSongAssistModal('${v.id}')`
+            : primaryAssist === 'venue'
+              ? `openVenueAssistModal('${v.id}')`
+              : `openDrawer('${v.id}')`;
+        const primaryAssistLabel = primaryAssist === 'band'
+          ? 'Assist Band'
+          : primaryAssist === 'song'
+            ? 'What song is this?'
+            : primaryAssist === 'venue'
+              ? 'Assist Venue'
+              : 'Inspect video';
 
         let confBadge = `<span class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-400">Score: ${conf}%</span>`;
         if (conf >= 80) {
@@ -1507,11 +1663,11 @@ HTML_PAGE = """<!DOCTYPE html>
         return `
           <div class="bg-card border border-border rounded-xl p-3 hover:border-brand-500/50 hover:shadow-lg hover:shadow-brand-500/5 transition space-y-2.5 group">
             <!-- Thumbnail Frame -->
-            <div class="relative w-full h-24 rounded-lg overflow-hidden border border-border/60 bg-black/40 cursor-pointer group/thumb" onclick="openVenueAssistModal('${v.id}')" title="Click to assist venue identification">
+            <div class="relative w-full h-24 rounded-lg overflow-hidden border border-border/60 bg-black/40 cursor-pointer group/thumb" onclick="${primaryAssistAction}" title="${primaryAssistLabel}">
               <img src="/api/video/${v.id}/thumbnail" alt="" class="w-full h-full object-cover">
               <div class="absolute inset-0 bg-black/50 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center text-[10px] text-white font-semibold transition gap-1">
                 <svg class="w-3.5 h-3.5 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-                <span>Assist Venue</span>
+                <span>${primaryAssistLabel}</span>
               </div>
             </div>
 
@@ -1540,16 +1696,19 @@ HTML_PAGE = """<!DOCTYPE html>
                     Band?
                   </button>
                 ` : ''}
-                <button type="button" onclick="event.stopPropagation(); openVenueAssistModal('${v.id}')" title="Assist venue identification" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/20 transition">
-                  Venue
-                </button>
+                ${needsVenueAssist ? `
+                  <button type="button" onclick="event.stopPropagation(); openVenueAssistModal('${v.id}')" title="Assist venue identification" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/20 transition">
+                    Venue?
+                  </button>
+                ` : ''}
+                ${needsSongAssist ? `
+                  <button type="button" onclick="event.stopPropagation(); openSongAssistModal('${v.id}')" title="What song is this?" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 transition">
+                    Song?
+                  </button>
+                ` : ''}
                 ${colKey === 'review' ? `
                   <button type="button" onclick="quickApprove('${v.id}')" class="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-brand-600 hover:bg-brand-500 text-white transition">
                     Approve ✓
-                  </button>
-                ` : songUnmatched && knownArtistForVideo(v) ? `
-                  <button onclick="openSongAssistModal('${v.id}')" class="text-xs text-rose-300 hover:text-white font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 transition">
-                    <span>What song is this?</span>
                   </button>
                 ` : `
                   <button type="button" onclick="openDrawer('${v.id}')" class="text-[10px] text-zinc-400 hover:text-white transition px-1">Inspect →</button>
@@ -1582,7 +1741,7 @@ HTML_PAGE = """<!DOCTYPE html>
         return;
       }
 
-      const needingBandList = pending.filter(v => isUnidentifiedSong(v));
+      const needingBandList = pending.filter(v => isBandUnmatched(v));
       const needingBandCount = needingBandList.length;
       const firstNeeding = needingBandList[0];
 
@@ -1618,7 +1777,7 @@ HTML_PAGE = """<!DOCTYPE html>
         const song = ident.detected_song_title || 'Live Performance';
         const venue = v.venue ? `${v.venue.name}, ${v.venue.city}` : 'Unknown Venue';
         const date = c.event_date || (v.recorded_at_utc ? v.recorded_at_utc.substring(0, 10) : 'Unknown Date');
-        const needsBandAssist = isUnidentifiedSong(v);
+        const needsBandAssist = isBandUnmatched(v);
         const songUnmatched = isSongUnmatched(v);
         const showBands = needsBandAssist ? getShowBands(v) : [];
 
@@ -1883,7 +2042,7 @@ HTML_PAGE = """<!DOCTYPE html>
       const bandAssistSection = document.getElementById('drawer-band-assist-section');
       const bandChips = document.getElementById('drawer-band-chips');
       if (bandAssistSection && bandChips) {
-        if (isUnidentifiedSong(v)) {
+        if (isBandUnmatched(v)) {
           bandAssistSection.classList.remove('hidden');
           const bands = getShowBands(v);
           const currentArtist = (ident.detected_artist || '').toLowerCase();
@@ -2364,7 +2523,7 @@ HTML_PAGE = """<!DOCTYPE html>
         await loadData();
 
         // Check if there are other pending videos needing band identification
-        const remaining = (videosData || []).filter(item => item.id !== vidId && item.processing_status === 'PENDING_REVIEW' && isUnidentifiedSong(item));
+        const remaining = (videosData || []).filter(item => item.id !== vidId && item.processing_status === 'PENDING_REVIEW' && isBandUnmatched(item));
         if (remaining.length > 0) {
           openBandAssistModal(remaining[0].id);
         } else {
@@ -2676,10 +2835,12 @@ async def handle_get_status(request: web.Request) -> web.Response:
         st = v.processing_status.value
         status_counts[st] = status_counts.get(st, 0) + 1
 
+    active_videos = [v for v in all_videos if v.processing_status != VideoStatus.REJECTED]
+
     uploads_today = db.get_todays_upload_count()
 
     payload = {
-        "total_videos": len(all_videos),
+        "total_videos": len(active_videos),
         "status_counts": status_counts,
         "uploads_today": uploads_today,
         "max_daily_uploads": settings.max_daily_uploads,
