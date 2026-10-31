@@ -15,7 +15,7 @@ class TestAudioExtractor(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.base_path = Path(self.temp_dir.name).resolve()
-        self.extractor = AudioExtractor(ffmpeg_bin="ffmpeg")
+        self.extractor = AudioExtractor(ffmpeg_bin="ffmpeg", cache_dir=self.base_path / "playback_audio")
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -152,6 +152,46 @@ class TestAudioExtractor(unittest.TestCase):
             "long_clip.audio_clip_03.mp3",
             "long_clip.audio_clip_04.mp3",
         ])
+
+    @patch("subprocess.run")
+    def test_extract_full_audio_fast_remux_and_aac_fallback(self, mock_run: MagicMock) -> None:
+        video_file = self.base_path / "giant_4k.mov"
+        video_file.write_bytes(b"fake mov container")
+        target_m4a = self.extractor.get_cached_playback_path("vid_123")
+
+        # 1) Fast stream-copy path succeeds in a single ffmpeg pass
+        def copy_pass(cmd, **kwargs):
+            Path(cmd[-1]).write_bytes(b"faststart aac m4a")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = copy_pass
+        out = self.extractor.extract_full_audio(video_file, target_m4a)
+        self.assertEqual(out, target_m4a)
+        self.assertEqual(target_m4a.read_bytes(), b"faststart aac m4a")
+        self.assertEqual(mock_run.call_count, 1)
+        first_cmd = mock_run.call_args[0][0]
+        self.assertIn("-vn", first_cmd)
+        self.assertIn("copy", first_cmd)
+        self.assertIn("+faststart", first_cmd)
+
+        # 2) Fallback transcode path when stream-copy fails (e.g. pcm_s16le)
+        target_pcm = self.extractor.get_cached_playback_path("vid_pcm")
+        mock_run.reset_mock()
+
+        def copy_fail_then_aac(cmd, **kwargs):
+            if "copy" in cmd:
+                return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="codec not supported in mp4")
+            Path(cmd[-1]).write_bytes(b"transcoded aac m4a")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = copy_fail_then_aac
+        out2 = self.extractor.extract_full_audio(video_file, target_pcm)
+        self.assertEqual(out2, target_pcm)
+        self.assertEqual(target_pcm.read_bytes(), b"transcoded aac m4a")
+        self.assertEqual(mock_run.call_count, 2)
+        second_cmd = mock_run.call_args_list[1][0][0]
+        self.assertIn("aac", second_cmd)
+        self.assertIn("128k", second_cmd)
 
 
 if __name__ == "__main__":

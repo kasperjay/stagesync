@@ -143,7 +143,7 @@ class PipelineCoordinator:
         self.metadata_parser = MetadataParser()
 
         # Intelligence components
-        self.audio_extractor = AudioExtractor()
+        self.audio_extractor = AudioExtractor(cache_dir=self.settings.cache_dir / "playback_audio")
         self.geocoder = ReverseGeocoder(db=self.db)
         self.setlist_client = SetlistFmClient()
         self.musicbrainz_client = MusicBrainzClient()

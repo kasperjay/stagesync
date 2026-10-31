@@ -7,20 +7,118 @@ a video file using an ffmpeg subprocess.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 import subprocess
 from typing import List, Optional, Union
+import uuid
 
+from stagesync.config import get_settings
 from stagesync.security import validate_executable
 
 logger = logging.getLogger(__name__)
 
 
 class AudioExtractor:
-    """Extracts normalized audio clips from video files via ffmpeg."""
+    """Extracts normalized audio clips and full-length playback tracks from video files via ffmpeg."""
 
-    def __init__(self, ffmpeg_bin: str = "ffmpeg") -> None:
+    def __init__(
+        self,
+        ffmpeg_bin: str = "ffmpeg",
+        cache_dir: Optional[Union[str, Path]] = None,
+    ) -> None:
         self.ffmpeg_bin = validate_executable(ffmpeg_bin)
+        settings = get_settings()
+        self.cache_dir = Path(cache_dir or (settings.cache_dir / "playback_audio"))
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_cached_playback_path(self, video_id: str) -> Path:
+        """Return destination path for a cached full-length web playback audio file."""
+        return self.cache_dir / f"{video_id}.m4a"
+
+    def extract_full_audio(
+        self,
+        video_path: Union[str, Path],
+        output_path: Optional[Union[str, Path]] = None,
+    ) -> Path:
+        """Extract the full-length audio stream as a faststart M4A (AAC) file for instant web playback.
+
+        First attempts a zero-reencode stream copy (`-c:a copy -movflags +faststart`), which
+        demuxes multi-gigabyte 4K `.MOV` containers in ~0.2s. Automatically falls back to
+        AAC 128kbps transcoding when the source audio codec (e.g. `pcm_s16le`) cannot be
+        remuxed directly into MP4/M4A.
+        """
+        source = Path(video_path).resolve()
+        if not source.exists():
+            raise FileNotFoundError(f"Video file does not exist: {source}")
+
+        out_file = (
+            Path(output_path).resolve()
+            if output_path is not None
+            else (self.cache_dir / f"{source.stem}.playback.m4a").resolve()
+        )
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+
+        tmp_file = out_file.parent / f".{out_file.stem}.{uuid.uuid4().hex}.tmp.m4a"
+
+        copy_cmd = [
+            self.ffmpeg_bin,
+            "-y",
+            "-i",
+            str(source),
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(tmp_file),
+        ]
+        transcode_cmd = [
+            self.ffmpeg_bin,
+            "-y",
+            "-i",
+            str(source),
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-ar",
+            "44100",
+            "-movflags",
+            "+faststart",
+            str(tmp_file),
+        ]
+
+        try:
+            res = subprocess.run(copy_cmd, shell=False, capture_output=True, text=True, check=False)
+            if res.returncode != 0 or not tmp_file.exists() or tmp_file.stat().st_size == 0:
+                if tmp_file.exists():
+                    tmp_file.unlink(missing_ok=True)
+                res2 = subprocess.run(
+                    transcode_cmd,
+                    shell=False,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                logger.debug("Transcoded playback audio for %s: %s", source.name, res2.returncode)
+
+            if not tmp_file.exists() or tmp_file.stat().st_size == 0:
+                raise RuntimeError(f"Extracted playback audio file is empty: {out_file}")
+
+            os.replace(tmp_file, out_file)
+            return out_file
+        except subprocess.CalledProcessError as exc:
+            logger.error("ffmpeg full-audio extraction failed on %s: %s", source, exc.stderr)
+            raise RuntimeError(f"FFmpeg full-audio extraction failed: {exc.stderr}") from exc
+        finally:
+            if tmp_file.exists():
+                tmp_file.unlink(missing_ok=True)
 
     def extract_clip(
         self,

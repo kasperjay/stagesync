@@ -1067,13 +1067,16 @@ HTML_PAGE = """<!DOCTYPE html>
           <div class="min-w-0 flex-1">
             <div class="flex items-center justify-between gap-2">
               <span id="song-assist-play-label" class="text-xs font-semibold text-zinc-100 truncate">Listen to this clip</span>
-              <span id="song-assist-time-display" class="font-mono text-[11px] text-zinc-400 tabular shrink-0">0:00 / 0:00</span>
+              <div class="flex items-center gap-2 shrink-0">
+                <span id="song-assist-buffer-badge" class="px-1.5 py-0.5 rounded text-[9px] font-mono border bg-zinc-800 text-zinc-400 border-border tabular">Buffering...</span>
+                <span id="song-assist-time-display" class="font-mono text-[11px] text-zinc-400 tabular">0:00 / 0:00</span>
+              </div>
             </div>
             <div id="song-assist-play-status" class="text-[10px] text-zinc-500 mt-0.5 truncate">Skip through audio to identify the song.</div>
           </div>
         </div>
 
-        <div class="space-y-1">
+        <div class="space-y-1.5">
           <div class="flex items-center gap-2">
             <button type="button" onclick="seekSongAssistRelative(-10)" class="px-2 py-1 rounded-md bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 hover:text-white text-[10px] font-mono border border-border transition shrink-0" title="Rewind 10 seconds" aria-label="Rewind 10 seconds">-10s</button>
             <input 
@@ -1090,9 +1093,12 @@ HTML_PAGE = """<!DOCTYPE html>
             />
             <button type="button" onclick="seekSongAssistRelative(10)" class="px-2 py-1 rounded-md bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 hover:text-white text-[10px] font-mono border border-border transition shrink-0" title="Forward 10 seconds" aria-label="Forward 10 seconds">+10s</button>
           </div>
+          <div class="h-1 w-full bg-zinc-900 rounded-full overflow-hidden border border-border/60" title="In-memory audio cache buffer">
+            <div id="song-assist-buffer-bar" class="h-full bg-emerald-500/70 transition-all duration-150" style="width: 0%"></div>
+          </div>
         </div>
 
-        <audio id="song-assist-audio" preload="metadata" class="hidden"></audio>
+        <audio id="song-assist-audio" preload="auto" class="hidden"></audio>
       </div>
       <div class="space-y-2">
         <div class="flex items-center justify-between">
@@ -1396,6 +1402,214 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
+    const songAssistAudioBlobCache = new Map();
+    const songAssistAudioInflight = new Map();
+    const SONG_AUDIO_CACHE_LIMIT = 20;
+    let songAssistAutoPlayPending = false;
+    let songAssistPendingSeekTime = null;
+    let songAssistAudioReadyVideoId = null;
+
+    function setSongAssistBufferUI(state, pct = 0, customLabel = '') {
+      const badge = document.getElementById('song-assist-buffer-badge');
+      const bar = document.getElementById('song-assist-buffer-bar');
+      const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+      if (bar) {
+        bar.style.width = `${clamped}%`;
+      }
+      if (!badge) return;
+      if (state === 'cached') {
+        badge.className = 'px-1.5 py-0.5 rounded text-[9px] font-mono border bg-emerald-500/15 text-emerald-300 border-emerald-500/30 tabular';
+        badge.innerText = customLabel || 'Cached 100%';
+      } else if (state === 'buffering') {
+        badge.className = 'px-1.5 py-0.5 rounded text-[9px] font-mono border bg-indigo-500/15 text-brand-200 border-brand-500/30 tabular';
+        badge.innerText = customLabel || (clamped > 0 ? `Buffering ${clamped}%` : 'Buffering...');
+      } else if (state === 'error') {
+        badge.className = 'px-1.5 py-0.5 rounded text-[9px] font-mono border bg-rose-500/15 text-rose-300 border-rose-500/30 tabular';
+        badge.innerText = customLabel || 'Stream Fallback';
+      } else {
+        badge.className = 'px-1.5 py-0.5 rounded text-[9px] font-mono border bg-zinc-800 text-zinc-400 border-border tabular';
+        badge.innerText = customLabel || 'Idle';
+      }
+    }
+
+    function storeAudioBlobInCache(videoId, blobUrl, sizeBytes) {
+      if (songAssistAudioBlobCache.has(videoId)) {
+        const prev = songAssistAudioBlobCache.get(videoId);
+        songAssistAudioBlobCache.delete(videoId);
+        if (prev && prev.blobUrl && prev.blobUrl !== blobUrl) {
+          URL.revokeObjectURL(prev.blobUrl);
+        }
+      }
+      songAssistAudioBlobCache.set(videoId, { blobUrl, sizeBytes });
+      while (songAssistAudioBlobCache.size > SONG_AUDIO_CACHE_LIMIT) {
+        const oldestKey = songAssistAudioBlobCache.keys().next().value;
+        if (!oldestKey || oldestKey === activeSongAssistVideoId) break;
+        const evicted = songAssistAudioBlobCache.get(oldestKey);
+        songAssistAudioBlobCache.delete(oldestKey);
+        if (evicted && evicted.blobUrl) {
+          URL.revokeObjectURL(evicted.blobUrl);
+        }
+      }
+    }
+
+    function preloadSongAssistAudio(videoId, onProgress) {
+      if (!videoId) return Promise.reject(new Error('Missing video ID'));
+      if (songAssistAudioBlobCache.has(videoId)) {
+        const entry = songAssistAudioBlobCache.get(videoId);
+        // Refresh LRU order
+        songAssistAudioBlobCache.delete(videoId);
+        songAssistAudioBlobCache.set(videoId, entry);
+        if (onProgress) onProgress(100, entry.sizeBytes, entry.sizeBytes);
+        return Promise.resolve(entry.blobUrl);
+      }
+
+      if (songAssistAudioInflight.has(videoId)) {
+        const existing = songAssistAudioInflight.get(videoId);
+        if (onProgress) {
+          existing.listeners.push(onProgress);
+          if (existing.lastPct > 0) {
+            onProgress(existing.lastPct, existing.loaded, existing.total);
+          }
+        }
+        return existing.promise;
+      }
+
+      const tracker = { listeners: onProgress ? [onProgress] : [], lastPct: 5, loaded: 0, total: 0, promise: null };
+      const notify = (pct, loaded, total) => {
+        tracker.lastPct = pct;
+        tracker.loaded = loaded;
+        tracker.total = total;
+        tracker.listeners.forEach(fn => {
+          try { fn(pct, loaded, total); } catch (_err) {}
+        });
+      };
+
+      tracker.promise = (async () => {
+        try {
+          notify(8, 0, 0);
+          const res = await fetch(`/api/video/${videoId}/audio`, { cache: 'force-cache' });
+          if (!res.ok) {
+            throw new Error(`Audio HTTP ${res.status}`);
+          }
+          const contentType = res.headers.get('Content-Type') || 'audio/mp4';
+          const totalBytes = Number(res.headers.get('Content-Length') || 0);
+
+          let blob;
+          if (res.body && typeof res.body.getReader === 'function') {
+            const reader = res.body.getReader();
+            const chunks = [];
+            let received = 0;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (value) {
+                chunks.push(value);
+                received += value.byteLength;
+                const pct = totalBytes > 0
+                  ? Math.min(99, Math.max(10, Math.round((received / totalBytes) * 100)))
+                  : Math.min(92, 15 + Math.round(Math.log10(received + 1) * 12));
+                notify(pct, received, totalBytes);
+              }
+            }
+            blob = new Blob(chunks, { type: contentType });
+          } else {
+            blob = await res.blob();
+          }
+
+          const blobUrl = URL.createObjectURL(blob);
+          storeAudioBlobInCache(videoId, blobUrl, blob.size);
+          notify(100, blob.size, blob.size);
+          return blobUrl;
+        } finally {
+          songAssistAudioInflight.delete(videoId);
+        }
+      })();
+
+      songAssistAudioInflight.set(videoId, tracker);
+      return tracker.promise;
+    }
+
+    async function prepareModalAudioClip(id) {
+      const audio = document.getElementById('song-assist-audio');
+      if (!audio || !id) return;
+
+      if (songAssistAudioBlobCache.has(id)) {
+        const cached = songAssistAudioBlobCache.get(id);
+        songAssistAudioReadyVideoId = id;
+        audio.src = cached.blobUrl;
+        audio.load();
+        setSongAssistBufferUI('cached', 100, 'Cached 100%');
+        document.getElementById('song-assist-play-status').innerText = 'Full audio cached in memory — instant skip ready.';
+        return;
+      }
+
+      setSongAssistBufferUI('buffering', 8, 'Buffering...');
+      document.getElementById('song-assist-play-status').innerText = 'Caching full audio track into memory for lag-free playback...';
+
+      try {
+        const blobUrl = await preloadSongAssistAudio(id, (pct) => {
+          if (activeSongAssistVideoId !== id) return;
+          if (pct >= 100) {
+            setSongAssistBufferUI('cached', 100, 'Cached 100%');
+          } else {
+            setSongAssistBufferUI('buffering', pct, `Buffering ${pct}%`);
+            if (songAssistAutoPlayPending) {
+              document.getElementById('song-assist-play-label').innerText = `Buffering clip (${pct}%)...`;
+            }
+          }
+        });
+
+        if (activeSongAssistVideoId !== id) return;
+        songAssistAudioReadyVideoId = id;
+        audio.src = blobUrl;
+        audio.load();
+        setSongAssistBufferUI('cached', 100, 'Cached 100%');
+
+        if (songAssistAutoPlayPending) {
+          songAssistAutoPlayPending = false;
+          if (songAssistPendingSeekTime !== null) {
+            audio.currentTime = songAssistPendingSeekTime;
+            songAssistPendingSeekTime = null;
+          }
+          await audio.play();
+          document.getElementById('song-assist-play-icon').innerText = 'Ⅱ';
+          document.getElementById('song-assist-play-label').innerText = 'Playing clip';
+          document.getElementById('song-assist-play-status').innerText = 'Full audio cached in memory — skip anywhere with zero lag.';
+        } else {
+          document.getElementById('song-assist-play-icon').innerText = '▶';
+          document.getElementById('song-assist-play-label').innerText = 'Listen to this clip';
+          document.getElementById('song-assist-play-status').innerText = 'Full audio cached in memory — instant skip ready.';
+        }
+      } catch (err) {
+        if (activeSongAssistVideoId !== id) return;
+        songAssistAudioReadyVideoId = id;
+        audio.src = `/api/video/${id}/audio`;
+        audio.load();
+        setSongAssistBufferUI('error', 100, 'Direct Stream');
+        if (songAssistAutoPlayPending) {
+          songAssistAutoPlayPending = false;
+          try { await audio.play(); } catch (_playErr) {}
+        }
+      }
+    }
+
+    function warmUnidentifiedAudioCache(priorityVideoId = null) {
+      const candidates = [];
+      if (priorityVideoId) candidates.push(priorityVideoId);
+      const pendingUnmatched = (videosData || [])
+        .filter(v => v.processing_status === 'PENDING_REVIEW' && isSongUnmatched(v) && knownArtistForVideo(v))
+        .slice(0, 2)
+        .map(v => v.id);
+      pendingUnmatched.forEach(vid => {
+        if (!candidates.includes(vid)) candidates.push(vid);
+      });
+      candidates.slice(0, 2).forEach(vid => {
+        if (!songAssistAudioBlobCache.has(vid) && !songAssistAudioInflight.has(vid)) {
+          preloadSongAssistAudio(vid).catch(() => {});
+        }
+      });
+    }
+
     function openSongAssistModal(id) {
       if (!id && activeSelectedVideo) id = activeSelectedVideo.id;
       const v = videosData.find(item => item.id === id);
@@ -1408,6 +1622,9 @@ HTML_PAGE = """<!DOCTYPE html>
       activeSongAssistVideoId = id;
       selectedSongTitle = null;
       isSongAssistScrubbing = false;
+      songAssistAutoPlayPending = false;
+      songAssistPendingSeekTime = null;
+      songAssistAudioReadyVideoId = null;
 
       document.getElementById('song-assist-file').innerText = v.filename || 'video.mov';
       document.getElementById('song-assist-artist').innerText = artist;
@@ -1428,8 +1645,8 @@ HTML_PAGE = """<!DOCTYPE html>
       const audio = document.getElementById('song-assist-audio');
       if (audio) {
         audio.pause();
-        audio.currentTime = 0;
-        audio.src = `/api/video/${id}/audio`;
+        audio.removeAttribute('src');
+        audio.load();
       }
 
       const totalDuration = (v.duration_seconds && v.duration_seconds > 0) ? v.duration_seconds : 0;
@@ -1448,6 +1665,7 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('btn-confirm-set-song').disabled = true;
       document.getElementById('song-options-container').innerHTML = '<div class="text-center py-5 text-zinc-500 text-xs">Loading song choices...</div>';
       document.getElementById('song-assist-modal').classList.remove('hidden');
+      prepareModalAudioClip(id);
       loadSongOptions('', false);
     }
 
@@ -1457,6 +1675,9 @@ HTML_PAGE = """<!DOCTYPE html>
       if (manualDismiss) {
         window._userDismissedSongModal = true;
       }
+      songAssistAutoPlayPending = false;
+      songAssistPendingSeekTime = null;
+      songAssistAudioReadyVideoId = null;
       const audio = document.getElementById('song-assist-audio');
       if (audio) {
         audio.pause();
@@ -1467,6 +1688,7 @@ HTML_PAGE = """<!DOCTYPE html>
       if (progress) {
         progress.value = 0;
       }
+      setSongAssistBufferUI('idle', 0, 'Idle');
       updateSongAssistTimeDisplay(0, 0);
       isSongAssistScrubbing = false;
       activeSongAssistVideoId = null;
@@ -1475,9 +1697,27 @@ HTML_PAGE = """<!DOCTYPE html>
 
     async function toggleSongAssistPlayback() {
       const audio = document.getElementById('song-assist-audio');
-      if (!audio) return;
+      if (!audio || !activeSongAssistVideoId) return;
       try {
+        if (songAssistAudioReadyVideoId !== activeSongAssistVideoId || !audio.getAttribute('src')) {
+          if (songAssistAutoPlayPending) {
+            songAssistAutoPlayPending = false;
+            document.getElementById('song-assist-play-icon').innerText = '▶';
+            document.getElementById('song-assist-play-label').innerText = 'Listen to this clip';
+            return;
+          }
+          songAssistAutoPlayPending = true;
+          document.getElementById('song-assist-play-icon').innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>';
+          document.getElementById('song-assist-play-label').innerText = 'Buffering clip...';
+          prepareModalAudioClip(activeSongAssistVideoId);
+          return;
+        }
+
         if (audio.paused) {
+          if (songAssistPendingSeekTime !== null) {
+            audio.currentTime = songAssistPendingSeekTime;
+            songAssistPendingSeekTime = null;
+          }
           await audio.play();
           document.getElementById('song-assist-play-icon').innerText = 'Ⅱ';
           document.getElementById('song-assist-play-label').innerText = 'Playing clip';
@@ -1504,12 +1744,15 @@ HTML_PAGE = """<!DOCTYPE html>
     function onSongAssistSeekChange(val) {
       const target = Number(val);
       const audio = document.getElementById('song-assist-audio');
-      if (audio) {
+      if (audio && songAssistAudioReadyVideoId === activeSongAssistVideoId && audio.readyState >= 1) {
         audio.currentTime = target;
+        songAssistPendingSeekTime = null;
+      } else {
+        songAssistPendingSeekTime = target;
       }
       isSongAssistScrubbing = false;
       if (audio) {
-        const total = (audio.duration && isFinite(audio.duration)) ? audio.duration : target;
+        const total = (audio.duration && isFinite(audio.duration)) ? audio.duration : (Number(document.getElementById('song-assist-progress')?.max) || target);
         updateSongAssistTimeDisplay(target, total);
         document.getElementById('song-assist-play-status').innerText = audio.paused ? `Paused at ${formatAudioTime(target)}` : `Playing from ${formatAudioTime(target)}`;
       }
@@ -1520,10 +1763,15 @@ HTML_PAGE = """<!DOCTYPE html>
       if (!audio) return;
       const progress = document.getElementById('song-assist-progress');
       const total = (audio.duration && isFinite(audio.duration)) ? audio.duration : (progress ? Number(progress.max) : 0);
-      const current = isNaN(audio.currentTime) ? 0 : audio.currentTime;
+      const baseTime = songAssistPendingSeekTime !== null ? songAssistPendingSeekTime : (isNaN(audio.currentTime) ? 0 : audio.currentTime);
       const maxBound = total > 0 ? total : 999999;
-      const target = Math.max(0, Math.min(maxBound, current + deltaSec));
-      audio.currentTime = target;
+      const target = Math.max(0, Math.min(maxBound, baseTime + deltaSec));
+      if (songAssistAudioReadyVideoId === activeSongAssistVideoId && audio.readyState >= 1) {
+        audio.currentTime = target;
+        songAssistPendingSeekTime = null;
+      } else {
+        songAssistPendingSeekTime = target;
+      }
       if (progress) progress.value = target;
       updateSongAssistTimeDisplay(target, total);
       document.getElementById('song-assist-play-status').innerText = `Jumped ${deltaSec > 0 ? '+' : ''}${deltaSec}s (${formatAudioTime(target)})`;
@@ -1535,6 +1783,12 @@ HTML_PAGE = """<!DOCTYPE html>
         const progress = document.getElementById('song-assist-progress');
         if (progress && songAssistAudioEl.duration && isFinite(songAssistAudioEl.duration) && songAssistAudioEl.duration > 0) {
           progress.max = songAssistAudioEl.duration;
+          if (songAssistPendingSeekTime !== null) {
+            const clampedSeek = Math.max(0, Math.min(songAssistAudioEl.duration, songAssistPendingSeekTime));
+            songAssistAudioEl.currentTime = clampedSeek;
+            progress.value = clampedSeek;
+            songAssistPendingSeekTime = null;
+          }
           updateSongAssistTimeDisplay(songAssistAudioEl.currentTime, songAssistAudioEl.duration);
         }
       });
@@ -2162,6 +2416,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
         if (activeTab === 'review') {
           setTimeout(checkAutoPromptBandModal, 150);
+          setTimeout(() => warmUnidentifiedAudioCache(), 250);
         }
       } catch (err) {
         console.error('Failed to load status', err);
@@ -2798,6 +3053,9 @@ HTML_PAGE = """<!DOCTYPE html>
       const defaultTitle = `${artist} - ${song} (Live at ${venue.name || 'Concert'}, ${c.event_date ? c.event_date.substring(0, 4) : ''})`;
       document.getElementById('drawer-title-input').value = defaultTitle;
       renderDrawerMatchFeedback(v.id);
+      if (isSongUnmatched(v)) {
+        warmUnidentifiedAudioCache(v.id);
+      }
 
       // Open drawer panel
       document.getElementById('drawer-backdrop').classList.remove('opacity-0', 'pointer-events-none');
@@ -3797,9 +4055,23 @@ async def handle_video_thumbnail(request: web.Request) -> web.Response:
     )
 
 
+_AUDIO_EXTRACT_LOCKS: Dict[str, asyncio.Lock] = {}
+_PURE_AUDIO_EXTENSIONS = {".m4a", ".mp3", ".aac", ".ogg", ".wav", ".flac", ".opus"}
+
+
+def _get_audio_extract_lock(video_id: str) -> asyncio.Lock:
+    """Return a per-video asyncio lock so concurrent requests share a single extraction pass."""
+    lock = _AUDIO_EXTRACT_LOCKS.get(video_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _AUDIO_EXTRACT_LOCKS[video_id] = lock
+    return lock
+
+
 async def handle_video_audio(request: web.Request) -> web.Response:
-    """Stream the original video container so the browser can play its audio track."""
+    """Serve a compact cached full-length audio track (faststart M4A) for instant web playback."""
     db: Database = request.app[DB_KEY]
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
     video = db.get_video(request.match_info["id"])
     if not video or not video.file_path:
         return web.json_response({"error": "Video file not available"}, status=404)
@@ -3808,12 +4080,55 @@ async def handle_video_audio(request: web.Request) -> web.Response:
     if not media_path.exists() or not media_path.is_file():
         return web.json_response({"error": "Video file not available"}, status=404)
 
+    cache_headers = {
+        "Content-Disposition": "inline",
+        "Cache-Control": "private, max-age=86400",
+    }
+
+    if media_path.suffix.lower() not in _PURE_AUDIO_EXTENSIONS:
+        audio_extractor = getattr(coordinator, "audio_extractor", None)
+        get_cached_fn = getattr(audio_extractor, "get_cached_playback_path", None)
+        extract_full_fn = getattr(audio_extractor, "extract_full_audio", None)
+        cached_audio_path = get_cached_fn(video.id) if callable(get_cached_fn) else None
+
+        if isinstance(cached_audio_path, Path):
+            if cached_audio_path.exists() and cached_audio_path.stat().st_size > 0:
+                return web.FileResponse(
+                    cached_audio_path,
+                    headers={"Content-Type": "audio/mp4", **cache_headers},
+                )
+            if callable(extract_full_fn):
+                async with _get_audio_extract_lock(video.id):
+                    if cached_audio_path.exists() and cached_audio_path.stat().st_size > 0:
+                        return web.FileResponse(
+                            cached_audio_path,
+                            headers={"Content-Type": "audio/mp4", **cache_headers},
+                        )
+                    try:
+                        extracted = await asyncio.to_thread(
+                            extract_full_fn,
+                            media_path,
+                            cached_audio_path,
+                        )
+                        if isinstance(extracted, Path) and extracted.exists() and extracted.stat().st_size > 0:
+                            return web.FileResponse(
+                                extracted,
+                                headers={"Content-Type": "audio/mp4", **cache_headers},
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "Full-audio extraction failed for %s (%s); falling back to raw media container: %s",
+                            video.id,
+                            media_path.name,
+                            exc,
+                        )
+
     content_type = video.mime_type or mimetypes.guess_type(media_path.name)[0] or "application/octet-stream"
     return web.FileResponse(
         media_path,
         headers={
             "Content-Type": content_type,
-            "Content-Disposition": "inline",
+            **cache_headers,
         },
     )
 

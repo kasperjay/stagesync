@@ -563,6 +563,54 @@ class TestWebServer(AioHTTPTestCase):
         self.assertIn("updateSongAssistTimeDisplay", text)
         self.assertIn("isSongAssistScrubbing", text)
 
+        # In-memory Blob cache & visual buffer indicators
+        self.assertIn('id="song-assist-buffer-badge"', text)
+        self.assertIn('id="song-assist-buffer-bar"', text)
+        self.assertIn('preload="auto"', text)
+        self.assertIn("songAssistAudioBlobCache", text)
+        self.assertIn("preloadSongAssistAudio", text)
+        self.assertIn("prepareModalAudioClip", text)
+
+    async def test_video_audio_extracts_and_serves_cached_m4a(self):
+        """Verify /api/video/{id}/audio demuxes and caches a compact audio/mp4 file instead of streaming huge MOV containers."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            raw_mov = tmp_path / "giant_4k.mov"
+            raw_mov.write_bytes(b"huge 4k video payload")
+            cached_m4a = tmp_path / "playback_audio" / "v_4k.m4a"
+
+            fake_video = Video(
+                id="v_4k",
+                source_photo_id="sp_4k",
+                filename="IMG_6131.MOV",
+                file_path=str(raw_mov),
+                mime_type="video/quicktime",
+            )
+            self.mock_db.get_video.return_value = fake_video
+            self.mock_coord.audio_extractor.get_cached_playback_path.return_value = cached_m4a
+
+            def fake_extract(src_path, dst_path):
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                dst_path.write_bytes(b"compact faststart m4a audio")
+                return dst_path
+
+            self.mock_coord.audio_extractor.extract_full_audio.side_effect = fake_extract
+
+            # First request extracts & caches
+            resp1 = await self.client.get("/api/video/v_4k/audio")
+            self.assertEqual(resp1.status, 200)
+            self.assertEqual(resp1.content_type, "audio/mp4")
+            self.assertIn("max-age=86400", resp1.headers.get("Cache-Control", ""))
+            self.assertEqual(await resp1.read(), b"compact faststart m4a audio")
+            self.mock_coord.audio_extractor.extract_full_audio.assert_called_once()
+
+            # Second request hits disk cache directly without invoking ffmpeg again
+            resp2 = await self.client.get("/api/video/v_4k/audio")
+            self.assertEqual(resp2.status, 200)
+            self.assertEqual(resp2.content_type, "audio/mp4")
+            self.assertEqual(await resp2.read(), b"compact faststart m4a audio")
+            self.mock_coord.audio_extractor.extract_full_audio.assert_called_once()
+
 
 
 if __name__ == "__main__":
