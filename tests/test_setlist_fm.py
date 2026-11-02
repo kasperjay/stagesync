@@ -172,6 +172,30 @@ class TestSetlistFm(unittest.TestCase):
         self.assertEqual(refreshed.lineup_artists, ["Artist A", "Artist B", "Artist C"])
         self.assertEqual(fetch.call_args.args[0]["p"], "1")
 
+    def test_search_concerts_falls_back_when_festival_is_not_a_tour_name(self) -> None:
+        payload = {
+            "setlist": [{
+                "id": "hangout-event",
+                "eventDate": "18-05-2014",
+                "artist": {"name": "OutKast"},
+                "venue": {"id": "hangout-venue", "name": "The Hangout", "city": {"name": "Gulf Shores", "country": {"code": "US"}}},
+                "sets": {"set": [{"song": [{"name": "Hey Ya!"}]}]},
+            }]
+        }
+        with patch.object(self.client, "_fetch_setlists_raw", side_effect=[None, payload]) as fetch:
+            results = self.client.search_concerts(
+                event_date="2014-05-18",
+                venue_name="The Hangout",
+                city_name="Gulf Shores",
+                tour_name="Hangout Music Fest",
+                max_pages=1,
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].headliner_artist, "OutKast")
+        self.assertEqual(fetch.call_args_list[0].args[0]["tourName"], "Hangout Music Fest")
+        self.assertNotIn("tourName", fetch.call_args_list[1].args[0])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -239,6 +239,46 @@ class SetlistFmClient:
         if country_code and country_code.strip():
             params["countryCode"] = country_code.strip().upper()
 
+        primary_results = self._search_concert_records(
+            params=params,
+            event_date=event_date,
+            artist_name=artist_name,
+            max_pages=max_pages,
+            max_results=max_results,
+        )
+        if primary_results or not tour_name:
+            return primary_results
+
+        fallback_params = dict(params)
+        fallback_params.pop("tourName", None)
+        fallback_results = self._search_concert_records(
+            params=fallback_params,
+            event_date=event_date,
+            artist_name=artist_name,
+            max_pages=max_pages,
+            max_results=max_results,
+        )
+        if fallback_results or not venue_name or not city_name or not event_date:
+            return fallback_results
+
+        fallback_params.pop("venueName", None)
+        return self._search_concert_records(
+            params=fallback_params,
+            event_date=event_date,
+            artist_name=artist_name,
+            max_pages=max_pages,
+            max_results=max_results,
+        )
+
+    def _search_concert_records(
+        self,
+        params: Dict[str, str],
+        event_date: Optional[str],
+        artist_name: Optional[str],
+        max_pages: int,
+        max_results: int,
+    ) -> List[MatchedConcert]:
+        """Fetch and parse one Setlist.fm search parameter set."""
         results: List[MatchedConcert] = []
         raw_results: List[Dict[str, Any]] = []
         seen_ids = set()
