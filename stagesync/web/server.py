@@ -2809,10 +2809,16 @@ HTML_PAGE = """<!DOCTYPE html>
                   </button>
                 ` : ''}
                 ${colKey === 'review' ? (isSuggested ? `
+                  <button type="button" onclick="event.stopPropagation(); openSetlistAssistModal('${v.id}')" title="Search exact concert / tour on Setlist.fm" aria-label="Search exact concert / tour on Setlist.fm" class="px-2 py-1 text-[10px] font-semibold rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 transition">
+                    Find exact concert
+                  </button>
                   <button type="button" onclick="event.stopPropagation(); confirmSuggestedMatch('${v.id}')" class="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-amber-600 hover:bg-amber-500 text-white transition">
                     Confirm Match ✓
                   </button>
                 ` : `
+                  <button type="button" onclick="event.stopPropagation(); openSetlistAssistModal('${v.id}')" title="Search exact concert / tour on Setlist.fm" aria-label="Search exact concert / tour on Setlist.fm" class="px-2 py-1 text-[10px] font-semibold rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 transition">
+                    Find exact concert
+                  </button>
                   <button type="button" onclick="quickApprove('${v.id}')" class="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-brand-600 hover:bg-brand-500 text-white transition">
                     Approve ✓
                   </button>

@@ -59,6 +59,8 @@ class TestWebServer(AioHTTPTestCase):
         self.assertIn("waitForScan", text)
         self.assertIn("Delete Permanently", text)
         self.assertIn("Search exact concert / tour on Setlist.fm", text)
+        self.assertIn("Find exact concert", text)
+        self.assertIn('title="Search exact concert / tour on Setlist.fm"', text)
         self.assertIn("openSetlistAssistModal", text)
         self.assertIn("setlist-match", text)
 
