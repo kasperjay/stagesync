@@ -196,6 +196,47 @@ class TestSetlistFm(unittest.TestCase):
         self.assertEqual(fetch.call_args_list[0].args[0]["tourName"], "Hangout Music Fest")
         self.assertNotIn("tourName", fetch.call_args_list[1].args[0])
 
+    def test_search_concerts_groups_festival_artists_into_one_show(self) -> None:
+        payload = {
+            "setlist": [
+                {
+                    "id": "hangout-headliner",
+                    "eventDate": "18-05-2014",
+                    "artist": {"name": "OutKast"},
+                    "venue": {"id": "hangout-venue", "name": "The Hangout", "city": {"name": "Gulf Shores", "country": {"code": "US"}}},
+                    "sets": {"set": [{"song": [{"name": "Hey Ya!"}]}]},
+                },
+                {
+                    "id": "hangout-support-a",
+                    "eventDate": "18-05-2014",
+                    "artist": {"name": "The Killers"},
+                    "venue": {"id": "hangout-venue", "name": "The Hangout", "city": {"name": "Gulf Shores", "country": {"code": "US"}}},
+                    "sets": {"set": [{"song": [{"name": "Mr. Brightside"}]}]},
+                },
+                {
+                    "id": "hangout-support-b",
+                    "eventDate": "18-05-2014",
+                    "artist": {"name": "The Black Keys"},
+                    "venue": {"id": "hangout-venue", "name": "The Hangout", "city": {"name": "Gulf Shores", "country": {"code": "US"}}},
+                    "sets": {"set": [{"song": [{"name": "Gold on the Ceiling"}]}]},
+                },
+            ]
+        }
+        with patch.object(self.client, "_fetch_setlists_raw", side_effect=[None, payload]) as fetch:
+            results = self.client.search_concerts(
+                event_date="2014-05-18",
+                venue_name="The Hangout",
+                city_name="Gulf Shores",
+                tour_name="Hangout Music Fest",
+                max_pages=1,
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].setlist_fm_event_id, "hangout-headliner")
+        self.assertEqual(results[0].tour_name, "Hangout Music Fest")
+        self.assertEqual(results[0].lineup_artists, ["OutKast", "The Killers", "The Black Keys"])
+        self.assertEqual(fetch.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -243,6 +243,7 @@ class SetlistFmClient:
             params=params,
             event_date=event_date,
             artist_name=artist_name,
+            tour_name=tour_name,
             max_pages=max_pages,
             max_results=max_results,
         )
@@ -255,6 +256,7 @@ class SetlistFmClient:
             params=fallback_params,
             event_date=event_date,
             artist_name=artist_name,
+            tour_name=tour_name,
             max_pages=max_pages,
             max_results=max_results,
         )
@@ -266,6 +268,7 @@ class SetlistFmClient:
             params=fallback_params,
             event_date=event_date,
             artist_name=artist_name,
+            tour_name=tour_name,
             max_pages=max_pages,
             max_results=max_results,
         )
@@ -275,6 +278,7 @@ class SetlistFmClient:
         params: Dict[str, str],
         event_date: Optional[str],
         artist_name: Optional[str],
+        tour_name: Optional[str],
         max_pages: int,
         max_results: int,
     ) -> List[MatchedConcert]:
@@ -303,10 +307,10 @@ class SetlistFmClient:
 
         grouped_setlists = self._group_setlists_by_show(raw_results)
         lineup_cache: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
-        for raw_setlist in raw_results:
-            show_setlists = grouped_setlists[self._show_key(raw_setlist)]
+        for show_setlists in grouped_setlists.values():
+            raw_setlist = self._best_setlist_record(show_setlists)
+            show_key = self._show_key(raw_setlist)
             if len(show_setlists) == 1 and artist_name:
-                show_key = self._show_key(raw_setlist)
                 if show_key not in lineup_cache:
                     lineup_cache[show_key] = self._fetch_show_lineup(raw_setlist)
                 show_setlists = lineup_cache[show_key]
@@ -316,9 +320,23 @@ class SetlistFmClient:
                 event_date or "",
                 all_setlists=show_setlists,
             )
+            if tour_name and not result.tour_name:
+                result.tour_name = tour_name.strip()
             results.append(result)
 
         return results
+
+    @staticmethod
+    def _best_setlist_record(setlists: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Choose the representative record for one show, preferring a populated setlist."""
+        return next(
+            (
+                item
+                for item in setlists
+                if item.get("sets", {}).get("set")
+            ),
+            setlists[0],
+        )
 
     @staticmethod
     def _show_key(item: Dict[str, Any]) -> Tuple[str, str, str]:

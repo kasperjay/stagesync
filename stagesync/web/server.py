@@ -3567,18 +3567,24 @@ HTML_PAGE = """<!DOCTYPE html>
           resultsBox.innerHTML = '<div class="text-center py-6 text-amber-300 text-xs">No Setlist.fm records matched. Try fewer filters or a different spelling.</div>';
           return;
         }
-        resultsBox.innerHTML = setlistSearchResults.map((concert, index) => `
+        resultsBox.innerHTML = setlistSearchResults.map((concert, index) => {
+          const lineup = concert.lineup_artists || [];
+          const showTitle = concert.tour_name || (lineup.length > 1 ? 'Festival show' : (concert.headliner_artist || 'Concert show'));
+          const lineupLabel = lineup.length > 1 ? `Lineup: ${lineup.slice(0, 4).join(', ')}${lineup.length > 4 ? ` +${lineup.length - 4} more` : ''}` : '';
+          return `
           <button type="button" onclick="attachSetlistConcert(${index})" class="w-full text-left p-3 rounded-xl bg-card-subtle hover:bg-card-hover border border-border hover:border-emerald-500/50 transition">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
-                <div class="font-bold text-sm text-zinc-100 truncate">${escapeHtml(concert.headliner_artist || 'Unknown artist')}</div>
+                <div class="font-bold text-sm text-zinc-100 truncate">${escapeHtml(showTitle)}</div>
                 <div class="text-xs text-emerald-300 mt-0.5">${escapeHtml(concert.venue_name || 'Unknown venue')} · ${escapeHtml(concert.city || '')}</div>
-                <div class="text-[11px] text-zinc-400 mt-1">${escapeHtml(concert.event_date || '')}${concert.tour_name ? ` · ${escapeHtml(concert.tour_name)}` : ''} · ${(concert.setlist_songs || []).length} songs</div>
+                <div class="text-[11px] text-zinc-400 mt-1">Headliner: ${escapeHtml(concert.headliner_artist || 'Unknown artist')} · ${(concert.setlist_songs || []).length} songs</div>
+                ${lineupLabel ? `<div class="text-[11px] text-zinc-500 mt-0.5 truncate">${escapeHtml(lineupLabel)}</div>` : ''}
               </div>
               <span class="shrink-0 px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 text-[10px] font-semibold">Use this show</span>
             </div>
           </button>
-        `).join('');
+          `;
+        }).join('');
       } catch (err) {
         resultsBox.innerHTML = `<div class="text-center py-6 text-rose-300 text-xs">${escapeHtml(err?.message || String(err))}</div>`;
       } finally {
@@ -3602,7 +3608,7 @@ HTML_PAGE = """<!DOCTYPE html>
         closeSetlistAssistModal();
         await loadData();
         if (activeSelectedVideo && activeSelectedVideo.id === id) openDrawer(id);
-        showToast({ type: 'success', title: 'Concert Matched', message: `${concert.headliner_artist} · ${concert.event_date} attached from Setlist.fm.`, durationMs: 6000 });
+        showToast({ type: 'success', title: 'Concert Matched', message: `${concert.tour_name || concert.headliner_artist} · ${concert.event_date} attached from Setlist.fm.`, durationMs: 6000 });
       } catch (err) {
         resultsBox.innerHTML = `<div class="text-center py-6 text-rose-300 text-xs">${escapeHtml(err?.message || String(err))}</div>`;
       }
