@@ -363,10 +363,11 @@ class TestWebServer(AioHTTPTestCase):
         self.assertEqual(resp.status, 404)
 
     def test_thumbnail_offset_changes_for_alternate_frames(self):
-        """Verify alternate frame indexes map to later timestamps."""
+        """Verify alternate frame indexes advance without cycling."""
         self.assertEqual(_thumbnail_offset(40.0, 0), 1.0)
-        self.assertEqual(_thumbnail_offset(40.0, 1), 14.0)
-        self.assertEqual(_thumbnail_offset(40.0, 2), 24.0)
+        offsets = [_thumbnail_offset(40.0, index) for index in range(1, 9)]
+        self.assertEqual(offsets, [6.0, 11.0, 16.0, 21.0, 26.0, 31.0, 36.0, 39.95])
+        self.assertEqual(len(set(offsets)), len(offsets))
 
     async def test_venue_search_endpoint(self):
         """Verify /api/venues/search calls venue_search_engine and returns results."""

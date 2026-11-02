@@ -3629,7 +3629,11 @@ HTML_PAGE = """<!DOCTYPE html>
       activeVenueAssistVideoId = id;
       selectedVenueData = null;
       const refreshButton = document.getElementById('venue-assist-refresh');
-      if (refreshButton) refreshButton.dataset.frameIndex = '0';
+      if (refreshButton) {
+        refreshButton.dataset.frameIndex = '0';
+        refreshButton.dataset.maxFrame = String(maxVideoStillFrame(v.duration_seconds));
+        refreshButton.disabled = Number(refreshButton.dataset.maxFrame) < 1;
+      }
 
       const thumbImg = document.getElementById('venue-assist-thumbnail');
       if (thumbImg) {
@@ -3677,6 +3681,11 @@ HTML_PAGE = """<!DOCTYPE html>
 
       const currentFrame = Number(button.dataset.frameIndex || '0');
       const nextFrame = currentFrame + 1;
+      const maxFrame = Number(button.dataset.maxFrame || '0');
+      if (maxFrame > 0 && nextFrame > maxFrame) {
+        button.disabled = true;
+        return;
+      }
       const previousSrc = image.src;
       button.disabled = true;
       button.classList.add('opacity-60');
@@ -3686,7 +3695,8 @@ HTML_PAGE = """<!DOCTYPE html>
       nextImage.onload = () => {
         image.src = nextImage.src;
         button.dataset.frameIndex = String(nextFrame);
-        button.disabled = false;
+        if (maxFrame > 0 && nextFrame >= maxFrame) button.disabled = true;
+        if (nextFrame < maxFrame || maxFrame <= 0) button.disabled = false;
         button.classList.remove('opacity-60');
         button.querySelector('span').innerText = '↻';
       };
@@ -3698,6 +3708,13 @@ HTML_PAGE = """<!DOCTYPE html>
         alert('Could not extract another frame from this video.');
       };
       nextImage.src = `/api/video/${id}/thumbnail?frame=${nextFrame}&t=${Date.now()}`;
+    }
+
+    function maxVideoStillFrame(durationSeconds) {
+      const duration = Number(durationSeconds || 0);
+      if (duration <= 1) return 0;
+      const step = Math.max(1, Math.min(8, duration / 8));
+      return Math.max(0, Math.floor((duration - 1) / step));
     }
 
     function handleVenueSearchInput(val) {
@@ -3903,7 +3920,11 @@ HTML_PAGE = """<!DOCTYPE html>
       activeBandAssistVideoId = id;
       selectedBandName = null;
       const refreshButton = document.getElementById('band-assist-refresh');
-      if (refreshButton) refreshButton.dataset.frameIndex = '0';
+      if (refreshButton) {
+        refreshButton.dataset.frameIndex = '0';
+        refreshButton.dataset.maxFrame = String(maxVideoStillFrame(v.duration_seconds));
+        refreshButton.disabled = Number(refreshButton.dataset.maxFrame) < 1;
+      }
 
       const thumbImg = document.getElementById('band-assist-thumbnail');
       if (thumbImg) {
@@ -4879,14 +4900,13 @@ async def handle_video_audio(request: web.Request) -> web.Response:
 
 
 def _thumbnail_offset(duration_seconds: Optional[float], frame_index: int) -> float:
-    """Pick a deterministic alternate timestamp for the requested frame."""
+    """Pick a monotonically advancing timestamp for the requested frame."""
     duration = max(0.0, float(duration_seconds or 0.0))
     if frame_index <= 0 or duration <= 1.0:
         return 1.0
 
-    positions = (0.35, 0.60, 0.80, 0.95)
-    position = positions[(frame_index - 1) % len(positions)]
-    return min(duration - 0.05, max(0.0, duration * position))
+    step = max(1.0, min(8.0, duration / 8.0))
+    return min(duration - 0.05, max(0.0, 1.0 + (frame_index * step)))
 
 
 async def handle_venue_search(request: web.Request) -> web.Response:
