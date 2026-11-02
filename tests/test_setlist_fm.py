@@ -146,7 +146,31 @@ class TestSetlistFm(unittest.TestCase):
             "venueName": "The Venue",
             "cityName": "Austin",
             "countryCode": "US",
+            "p": "1",
         })
+
+    def test_refresh_show_lineup_uses_unfiltered_show_records(self) -> None:
+        selected = {
+            "id": "event-1",
+            "eventDate": "15-08-2024",
+            "artist": {"name": "Artist A"},
+            "venue": {"id": "venue-1", "name": "The Venue", "city": {"name": "Austin", "country": {"code": "US"}}},
+            "tour": {"name": "Summer Tour"},
+            "sets": {"set": [{"song": [{"name": "Song A"}]}]},
+        }
+        lineup = {
+            "setlist": [
+                selected,
+                {**selected, "id": "event-2", "artist": {"name": "Artist B"}},
+                {**selected, "id": "event-3", "artist": {"name": "Artist C"}},
+            ]
+        }
+        matched = self.client.parse_setlist_payload(selected, "2024-08-15")
+        with patch.object(self.client, "_fetch_setlists_raw", return_value=lineup) as fetch:
+            refreshed = self.client.refresh_show_lineup(matched)
+
+        self.assertEqual(refreshed.lineup_artists, ["Artist A", "Artist B", "Artist C"])
+        self.assertEqual(fetch.call_args.args[0]["p"], "1")
 
 
 if __name__ == "__main__":

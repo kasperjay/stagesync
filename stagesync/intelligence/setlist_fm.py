@@ -318,14 +318,37 @@ class SetlistFmClient:
         country = (city.get("country") or {}).get("code")
         if country:
             params["countryCode"] = country
-        data = self._fetch_setlists_raw(params)
-        lineup = data.get("setlist", []) if data else []
+        lineup: List[Dict[str, Any]] = []
+        for page in range(1, 4):
+            data = self._fetch_setlists_raw({**params, "p": str(page)})
+            page_items = data.get("setlist", []) if data else []
+            if not page_items:
+                break
+            lineup.extend(page_items)
+            if len(page_items) < 20:
+                break
         if not lineup:
             return [item]
 
         show_key = self._show_key(item)
         matching = [candidate for candidate in lineup if self._show_key(candidate) == show_key]
         return matching or [item]
+
+    def refresh_show_lineup(self, matched: MatchedConcert) -> MatchedConcert:
+        """Refresh a selected show's lineup without carrying over another video's artists."""
+        raw_item = dict(matched.raw_setlist_data or {})
+        if not raw_item:
+            return matched
+        lineup = self._fetch_show_lineup(raw_item)
+        if len(lineup) <= 1:
+            return matched
+        refreshed = self.parse_setlist_payload(
+            raw_item,
+            matched.event_date,
+            all_setlists=lineup,
+        )
+        refreshed.source_url = matched.source_url or refreshed.source_url
+        return refreshed
 
     def _fetch_setlists_raw(self, params: Dict[str, str]) -> Optional[Dict[str, Any]]:
         """Execute HTTP request against Setlist.fm search endpoint."""

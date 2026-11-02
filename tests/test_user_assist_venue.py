@@ -308,6 +308,48 @@ class TestReidentifyVideoWithVenue(unittest.TestCase):
             "Come and Take It Live",
         )
 
+    def test_attach_selected_concert_preserves_existing_artist_and_refreshes_lineup(self):
+        video = self.db.save_video(
+            Video(
+                source_photo_id="sp_manual_artist",
+                filename="manual-artist.mov",
+                recorded_at_local="2023-10-13T20:45:35",
+                processing_status=VideoStatus.PENDING_REVIEW,
+            )
+        )
+        self.db.save_identification(
+            Identification(
+                video_id=video.id,
+                detected_song_title="Live Performance",
+                detected_artist="Gideon",
+                match_confidence=0.75,
+            )
+        )
+        matched = MatchedConcert(
+            setlist_fm_event_id="selected-event",
+            headliner_artist="Attila",
+            lineup_artists=["Attila", "Wrong Shared Artist"],
+            event_date="2023-10-13",
+            venue_name="Come and Take It Live",
+            venue_id="63d55e97",
+            city="Austin",
+            country_code="US",
+            raw_setlist_data={
+                "id": "selected-event",
+                "eventDate": "13-10-2023",
+                "artist": {"name": "Attila"},
+                "venue": {"id": "63d55e97", "name": "Come and Take It Live", "city": {"name": "Austin", "country": {"code": "US"}}},
+            },
+        )
+        self.coord.setlist_client.refresh_show_lineup = MagicMock(
+            return_value=matched.model_copy(update={"lineup_artists": ["Attila", "Gideon", "Ten56", "Until I Wake"]})
+        )
+
+        _, concert, ident = self.coord.attach_setlist_concert(video.id, matched)
+
+        self.assertEqual(ident.detected_artist, "Gideon")
+        self.assertEqual(concert.lineup_artists, ["Attila", "Gideon", "Ten56", "Until I Wake"])
+
 
 if __name__ == "__main__":
     unittest.main()

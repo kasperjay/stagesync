@@ -1631,6 +1631,11 @@ class PipelineCoordinator:
         if not video:
             raise ValueError(f"Video {video_id} not found.")
 
+        try:
+            matched = self.setlist_client.refresh_show_lineup(matched)
+        except Exception as exc:
+            logger.warning("Could not refresh selected show's lineup for %s: %s", video_id, exc)
+
         venue = self.db.get_venue_by_setlist_id(matched.venue_id) if matched.venue_id else None
         if not venue:
             venue = Venue(
@@ -1662,6 +1667,10 @@ class PipelineCoordinator:
         ))
 
         ident = self.db.get_identification_by_video_id(video.id)
+        existing_artist = ident.detected_artist.strip() if ident and ident.detected_artist else ""
+        preserved_artist = existing_artist if existing_artist.casefold() not in {
+            "live artist", "unknown artist", "unknown", "various artists"
+        } else ""
         if not ident:
             ident = Identification(
                 video_id=video.id,
@@ -1671,7 +1680,9 @@ class PipelineCoordinator:
                 fingerprint_service="setlist_fm_manual",
             )
         ident.concert_id = concert.id
-        if not ident.detected_song_title or ident.detected_song_title in {"Live Performance", "Unknown Song"}:
+        if preserved_artist:
+            ident.detected_artist = preserved_artist
+        elif not ident.detected_song_title or ident.detected_song_title in {"Live Performance", "Unknown Song"}:
             ident.detected_artist = matched.headliner_artist
         ident.setlist_verified = True
         ident.match_confidence = max(ident.match_confidence, 0.90)
