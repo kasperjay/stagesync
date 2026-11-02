@@ -158,6 +158,57 @@ class TestUserAssistBandSelection(unittest.TestCase):
         persisted_concert = self.db.get_concert(saved_concert.id)
         self.assertIn("Holy Fawn", persisted_concert.lineup_artists)
 
+    def test_changing_approved_artist_returns_video_to_review(self):
+        """Correcting an approved match must remove it from the upload queue."""
+        concert = self.db.save_concert(
+            Concert(
+                headliner_artist="Attila",
+                event_date="2023-10-13",
+                lineup_artists=["Attila", "Gideon"],
+            )
+        )
+        video = self.db.save_video(
+            Video(
+                source_photo_id="sp_approved_1",
+                filename="approved.mov",
+                processing_status=VideoStatus.APPROVED,
+            )
+        )
+        self.db.save_identification(
+            Identification(
+                video_id=video.id,
+                concert_id=concert.id,
+                detected_song_title="Live Performance",
+                detected_artist="Attila",
+                match_confidence=0.95,
+            )
+        )
+        self.db.save_youtube_upload(
+            YouTubeUpload(video_id=video.id, title="Attila - Live", description="", upload_status="QUEUED")
+        )
+
+        updated_video, _, updated_ident = self.coordinator.reidentify_video_with_band(
+            video_id=video.id,
+            artist_name="Gideon",
+        )
+
+        self.assertEqual(updated_ident.detected_artist, "Gideon")
+        self.assertEqual(updated_video.processing_status, VideoStatus.PENDING_REVIEW)
+        self.assertEqual(self.db.get_youtube_upload_by_video_id(video.id).upload_status, "DRAFT")
+
+    def test_published_artist_cannot_be_changed(self):
+        """Published archival records are immutable through artist correction."""
+        video = self.db.save_video(
+            Video(
+                source_photo_id="sp_published_1",
+                filename="published.mov",
+                processing_status=VideoStatus.PUBLISHED,
+            )
+        )
+
+        with self.assertRaisesRegex(ValueError, "Published videos cannot"):
+            self.coordinator.reidentify_video_with_band(video.id, "Gideon")
+
     def test_reidentify_video_with_band_continues_to_song_matching(self):
         """Selecting an artist should immediately attempt song identification."""
         venue = self.db.save_venue(

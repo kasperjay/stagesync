@@ -785,18 +785,18 @@ HTML_PAGE = """<!DOCTYPE html>
           </div>
         </div>
 
-        <!-- Which band is this? (Concert Lineup Assistant) -->
+        <!-- Change artist (Concert Lineup Assistant) -->
         <div id="drawer-band-assist-section" class="hidden bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 space-y-3">
           <div class="flex items-center justify-between">
             <span class="text-[10px] font-bold tracking-wider uppercase text-amber-400 flex items-center gap-1.5">
               <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
-              Which band is this?
+              Change Artist
             </span>
             <button type="button" onclick="openBandAssistModal(activeSelectedVideo ? activeSelectedVideo.id : '')" class="text-[10px] text-amber-300 font-semibold hover:underline flex items-center gap-1">
-              Still Preview →
+              Choose from lineup →
             </button>
           </div>
-          <p class="text-[11px] text-zinc-300 leading-snug">Concert matched, but song/performer is unconfirmed. Select who performed in this clip:</p>
+          <p class="text-[11px] text-zinc-300 leading-snug">Correct the matched performer if StageSync selected the wrong artist. Changing it sends this video back to Needs Review.</p>
           <div id="drawer-band-chips" class="flex flex-wrap gap-1.5 pt-1">
             <!-- Dynamic band buttons -->
           </div>
@@ -3248,7 +3248,7 @@ HTML_PAGE = """<!DOCTYPE html>
       const bandAssistSection = document.getElementById('drawer-band-assist-section');
       const bandChips = document.getElementById('drawer-band-chips');
       if (bandAssistSection && bandChips) {
-        if (isBandUnmatched(v)) {
+        if (!isPublished) {
           bandAssistSection.classList.remove('hidden');
           const bands = getShowBands(v);
           const currentArtist = (ident.detected_artist || '').toLowerCase();

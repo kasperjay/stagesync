@@ -1778,6 +1778,8 @@ class PipelineCoordinator:
         video = self.db.get_video(video_id)
         if not video:
             raise ValueError(f"Video {video_id} not found.")
+        if video.processing_status == VideoStatus.PUBLISHED:
+            raise ValueError("Published videos cannot have their artist changed.")
 
         ident = self.db.get_identification_by_video_id(video.id)
         concert: Optional[Concert] = None
@@ -1946,6 +1948,7 @@ class PipelineCoordinator:
             upload_job.title = yt_meta.title
             upload_job.description = yt_meta.description
             upload_job.tags = yt_meta.tags
+            upload_job.upload_status = "DRAFT"
         self.db.save_youtube_upload(upload_job)
 
         video.processing_status = VideoStatus.PENDING_REVIEW

@@ -41,6 +41,8 @@ class TestWebServer(AioHTTPTestCase):
         self.assertIn("activeStatusFilter === 'ALL') return v.processing_status !== 'REJECTED'", text)
         self.assertIn("Lineup Identification Required", text)
         self.assertIn("openBandAssistModal", text)
+        self.assertIn("Change Artist", text)
+        self.assertIn("Changing it sends this video back to Needs Review", text)
         self.assertIn("venue-assist-refresh", text)
         self.assertIn("band-assist-refresh", text)
         self.assertIn("refreshVideoStill", text)
