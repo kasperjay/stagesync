@@ -178,6 +178,19 @@ class Settings(BaseModel):
     min_duration_seconds: float = Field(
         default_factory=lambda: float(os.getenv("STAGESYNC_MIN_DURATION_SECONDS", "8.0"))
     )
+    max_duration_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("STAGESYNC_MAX_DURATION_SECONDS", "900.0"))
+    )
+    concert_time_filter_enabled: bool = Field(
+        default_factory=lambda: os.getenv("STAGESYNC_CONCERT_TIME_FILTER_ENABLED", "true").lower()
+        in {"1", "true", "yes", "on"}
+    )
+    concert_start_time: str = Field(
+        default_factory=lambda: os.getenv("STAGESYNC_CONCERT_START_TIME", "17:30")
+    )
+    concert_end_time: str = Field(
+        default_factory=lambda: os.getenv("STAGESYNC_CONCERT_END_TIME", "02:30")
+    )
 
     @property
     def database_path(self) -> Path:

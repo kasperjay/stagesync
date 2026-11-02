@@ -298,6 +298,49 @@ class TestGoogleDrive(unittest.TestCase):
 
         self.assertEqual([video.filename for video in videos], ["In_Range.MOV"])
 
+    def test_pipeline_filters_drive_non_concert_duration_and_time_before_cataloging(self) -> None:
+        coordinator = PipelineCoordinator(db=self.db)
+        coordinator.drive_client = MagicMock()
+        coordinator.drive_client.list_videos.return_value = (
+            [
+                {
+                    "id": "drv_long",
+                    "name": "Long_NonConcert.MOV",
+                    "mimeType": "video/quicktime",
+                    "size": "5000000",
+                    "videoMediaMetadata": {
+                        "durationMillis": "1200000",
+                        "time": "2024-08-15T20:00:00-05:00",
+                    },
+                },
+                {
+                    "id": "drv_daytime",
+                    "name": "Daytime_NonConcert.MOV",
+                    "mimeType": "video/quicktime",
+                    "size": "5000000",
+                    "videoMediaMetadata": {
+                        "durationMillis": "95000",
+                        "time": "2024-08-15T11:00:00-05:00",
+                    },
+                },
+                {
+                    "id": "drv_concert",
+                    "name": "Concert.MOV",
+                    "mimeType": "video/quicktime",
+                    "size": "5000000",
+                    "videoMediaMetadata": {
+                        "durationMillis": "95000",
+                        "time": "2024-08-15T21:00:00-05:00",
+                    },
+                },
+            ],
+            None,
+        )
+
+        videos = coordinator.scan_google_drive(folder_id="folder_abc", dry_run=True)
+
+        self.assertEqual([video.filename for video in videos], ["Concert.MOV"])
+
     def test_is_likely_video_file_filter(self) -> None:
         """Verify is_likely_video_file rejects code, presets, and small false-positives."""
         # False positives from Google Drive misclassification

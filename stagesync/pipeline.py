@@ -62,6 +62,43 @@ ProgressCallback = Callable[[int, int, str], None]
 class PipelineCoordinator:
     """Master pipeline orchestrator for StageSync."""
 
+    def _is_concert_candidate(
+        self,
+        duration_seconds: Optional[float],
+        recorded_at: Optional[Union[datetime.date, datetime.datetime, str]],
+    ) -> bool:
+        """Return whether known media metadata fits the concert discovery policy."""
+        if duration_seconds is not None:
+            if duration_seconds < self.settings.min_duration_seconds:
+                return False
+            if duration_seconds > getattr(self.settings, "max_duration_seconds", 900.0):
+                return False
+
+        if not recorded_at or not getattr(self.settings, "concert_time_filter_enabled", True):
+            return True
+
+        if isinstance(recorded_at, datetime.datetime):
+            recorded_time = recorded_at.timetz().replace(tzinfo=None)
+        elif isinstance(recorded_at, datetime.date):
+            return True
+        else:
+            value = str(recorded_at).strip().replace("Z", "+00:00")
+            try:
+                recorded_time = datetime.datetime.fromisoformat(value).timetz().replace(tzinfo=None)
+            except ValueError:
+                return True
+
+        try:
+            start = datetime.time.fromisoformat(getattr(self.settings, "concert_start_time", "17:30"))
+            end = datetime.time.fromisoformat(getattr(self.settings, "concert_end_time", "02:30"))
+        except ValueError:
+            logger.warning("Invalid concert time filter configuration; ignoring time filter")
+            return True
+
+        if start <= end:
+            return start <= recorded_time <= end
+        return recorded_time >= start or recorded_time <= end
+
     def _is_short_clip(self, duration_seconds: Optional[float]) -> bool:
         """Return whether a clip is below the configured archival threshold."""
         return (
@@ -565,6 +602,12 @@ class PipelineCoordinator:
             source_id = f"drive_{file_id}"
             existing = self.db.get_video_by_source_id(source_id)
             if existing:
+                if not self._is_concert_candidate(
+                    existing.duration_seconds,
+                    existing.recorded_at_local or existing.recorded_at_utc,
+                ):
+                    logger.debug("Skipping existing Drive video outside concert candidate policy: %s", existing.filename)
+                    continue
                 if existing.processing_status == VideoStatus.REJECTED:
                     continue
                 # If already downloaded and available locally, skip
@@ -594,6 +637,16 @@ class PipelineCoordinator:
                 height = int(video_meta.get("height", 0)) or None
                 duration_ms = float(video_meta.get("durationMillis", 0)) or 0.0
                 duration_sec = duration_ms / 1000.0 if duration_ms > 0 else None
+                recorded_at = video_meta.get("time") or image_meta.get("time")
+
+                if not self._is_concert_candidate(duration_sec, recorded_at):
+                    logger.debug(
+                        "Skipping Drive item outside concert candidate policy: %s (duration=%s, recorded_at=%s)",
+                        clean_filename,
+                        duration_sec,
+                        recorded_at,
+                    )
+                    continue
 
                 # Pre-filter: Skip Live Photos and short clips (< min_duration_seconds)
                 if duration_sec is not None and duration_sec < self.settings.min_duration_seconds:
@@ -635,7 +688,7 @@ class PipelineCoordinator:
                     device_make=device_make,
                     device_model=device_model,
                     file_size_bytes=file_size,
-                    recorded_at_utc=video_meta.get("time") or image_meta.get("time"),
+                    recorded_at_utc=recorded_at,
                     processing_status=VideoStatus.DISCOVERED,
                 )
 
@@ -688,6 +741,18 @@ class PipelineCoordinator:
                             recorded_date,
                         )
                         continue
+
+                if not self._is_concert_candidate(
+                    video.duration_seconds,
+                    video.recorded_at_local or video.recorded_at_utc,
+                ):
+                    with contextlib.suppress(OSError):
+                        Path(video.file_path or "").unlink()
+                    logger.debug(
+                        "Skipping downloaded Drive video outside concert candidate policy: %s",
+                        clean_filename,
+                    )
+                    continue
 
             saved = self.db.save_video(video)
             discovered_videos.append(saved)
