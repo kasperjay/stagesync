@@ -94,6 +94,12 @@ Google deprecated the `photoslibrary.readonly` scope on March 31, 2025. This mea
 2. **Local Directory** (`stagesync scan --dir /path/to/concert_videos`) — scan a locally synced folder of concert videos
 3. **App-created media only** (Library API `mediaItems:search`) — only returns videos previously uploaded by this app
 
+## 2A. Lyrics-to-Discography Suggestion Fallback
+
+When Shazam and setlist-constrained Gemini matching do not identify a song, StageSync may use lyrics detected by Gemini to search the performing artist's MusicBrainz discography and ask Gemini to map the lyric fragment to one of those known recording titles. This result is persisted with `fingerprint_service=lyrics_discography` and `status=SUGGESTED`.
+
+Lyrics-based results are never auto-approved. The video remains `PENDING_REVIEW`, no YouTube metadata or upload draft is generated, and the dashboard requires playback review followed by an explicit confirmation. Confirmation promotes the identification to `CONFIRMED`, generates metadata, and queues the upload through the normal approval path. Rejecting the suggestion leaves the video unidentified and does not create publication metadata.
+
 ---
 
 ## 3. End-to-End Sequence Lifecycle

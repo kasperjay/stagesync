@@ -10,7 +10,9 @@ import base64
 import json
 import logging
 from pathlib import Path
+import random
 import re
+import time
 from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 import requests
@@ -20,6 +22,8 @@ from stagesync.config import get_settings
 logger = logging.getLogger(__name__)
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+GEMINI_MAX_ATTEMPTS = 4
+GEMINI_RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
 class AIAudioJudgeResult(BaseModel):
@@ -146,8 +150,7 @@ class AIAudioJudge:
                 },
             }
 
-            res = requests.post(url, json=payload, timeout=60.0)
-            res.raise_for_status()
+            res = self._post_with_retry(url, payload)
             data = res.json()
 
             candidates = data.get("candidates", [])
@@ -162,9 +165,131 @@ class AIAudioJudge:
             )
 
         except Exception as e:
-            logger.warning("Gemini AI audio judge request failed: %s", e)
-            err_msg = f"Gemini API request error: {e}"
+            err_msg = self._safe_error_message(e)
+            logger.warning("Gemini AI audio judge request failed: %s", err_msg)
             return self._heuristic_fallback(candidate_songs, reason=err_msg, error=err_msg)
+
+    def match_lyrics_to_discography(
+        self,
+        lyrics: str,
+        artist_name: str,
+        discography: List[str],
+    ) -> AIAudioJudgeResult:
+        """Suggest a discography title from detected lyrics without confirming it."""
+        usable_lyrics = (lyrics or "").strip()
+        usable_artist = (artist_name or "").strip()
+        candidates = [title.strip() for title in discography if title and title.strip()]
+        if not usable_lyrics or not usable_artist or not candidates:
+            return AIAudioJudgeResult(
+                matched=False,
+                reasoning="Lyrics, performing artist, or discography candidates are missing.",
+                service="lyrics_discography",
+            )
+        if not self.api_key:
+            return AIAudioJudgeResult(
+                matched=False,
+                reasoning="Gemini API key is not configured for lyrics-to-discography matching.",
+                service="lyrics_discography",
+            )
+
+        prompt = (
+            "You are matching a short, possibly imperfectly transcribed lyric fragment to an artist's discography.\n"
+            f"Artist: {usable_artist}\n"
+            f"Detected lyrics: {usable_lyrics}\n\n"
+            "Choose only a title from the numbered discography below. Do not invent a title. "
+            "Return an empty song_title and confidence below 0.5 when the evidence is insufficient.\n"
+            + "\n".join(f"{index + 1}. {title}" for index, title in enumerate(candidates))
+            + '\n\nReturn JSON: {"song_title":"string","confidence":0.0,"reasoning":"string"}'
+        )
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
+        }
+        try:
+            url = f"{GEMINI_API_BASE}/{self.model}:generateContent?key={self.api_key}"
+            response = self._post_with_retry(url, payload)
+            data = response.json()
+            parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts") or [{}]
+            text = parts[0].get("text", "") if parts else ""
+            result = self._parse_gemini_json(text, candidates, data)
+            normalized = self._normalize_title(result.song_title)
+            valid_candidate = any(
+                normalized == self._normalize_title(candidate)
+                or normalized in self._normalize_title(candidate)
+                or self._normalize_title(candidate) in normalized
+                for candidate in candidates
+            )
+            if not valid_candidate:
+                result.matched = False
+                result.song_title = None
+                result.confidence = 0.0
+                result.reasoning = result.reasoning or "Lyrics did not map to a discography title."
+            result.service = "lyrics_discography"
+            result.setlist_index = None
+            result.lyrics_detected = usable_lyrics
+            return result
+        except Exception as exc:
+            error = self._safe_error_message(exc)
+            logger.warning("Lyrics discography match failed: %s", error)
+            return AIAudioJudgeResult(
+                matched=False,
+                lyrics_detected=usable_lyrics,
+                reasoning=error,
+                error=error,
+                service="lyrics_discography",
+            )
+
+    @staticmethod
+    def _normalize_title(value: Optional[str]) -> str:
+        return "".join(char.casefold() for char in (value or "") if char.isalnum())
+
+    def _post_with_retry(self, url: str, payload: Dict[str, Any]) -> requests.Response:
+        """POST to Gemini with bounded retries for transient provider failures."""
+        for attempt in range(GEMINI_MAX_ATTEMPTS):
+            try:
+                response = requests.post(url, json=payload, timeout=60.0)
+                if response.status_code not in GEMINI_RETRYABLE_STATUS_CODES:
+                    response.raise_for_status()
+                    return response
+
+                if attempt == GEMINI_MAX_ATTEMPTS - 1:
+                    response.raise_for_status()
+
+                delay = self._retry_delay(response, attempt)
+                logger.warning(
+                    "Gemini audio request returned HTTP %s; retrying in %.2fs (attempt %s/%s)",
+                    response.status_code,
+                    delay,
+                    attempt + 1,
+                    GEMINI_MAX_ATTEMPTS,
+                )
+                time.sleep(delay)
+            except requests.RequestException:
+                raise
+
+        raise RuntimeError("Gemini request retry loop exited unexpectedly")
+
+    @staticmethod
+    def _retry_delay(response: requests.Response, attempt: int) -> float:
+        """Return Retry-After when usable, otherwise exponential backoff with jitter."""
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(30.0, max(0.0, float(retry_after)))
+            except ValueError:
+                pass
+        return min(30.0, (2**attempt) + random.uniform(0.0, 0.25))
+
+    @staticmethod
+    def _safe_error_message(error: Exception) -> str:
+        """Describe provider failures without exposing the API key in request URLs."""
+        if isinstance(error, requests.HTTPError):
+            response = error.response
+            status = response.status_code if response is not None else None
+            if status:
+                return f"Gemini API returned HTTP {status} after retries."
+            return "Gemini API request failed after retries."
+        return f"Gemini API request error: {type(error).__name__}: {error}"
 
     def _parse_gemini_json(
         self,

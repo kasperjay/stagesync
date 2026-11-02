@@ -1,6 +1,7 @@
 """Unit tests for Setlist.fm API client and response parsing."""
 
 import unittest
+from unittest.mock import patch
 from stagesync.intelligence.setlist_fm import SetlistFmClient
 from tests.conftest import SAMPLE_SETLIST_FM_PAYLOAD
 
@@ -57,6 +58,75 @@ class TestSetlistFm(unittest.TestCase):
             city_name="Morrison",
         )
         self.assertIsNone(res2)
+
+    def test_venue_search_preserves_matched_artist_for_multi_event_festival(self) -> None:
+        festival = {
+            "setlist": [
+                {
+                    "id": "festival-artist-a",
+                    "eventDate": "15-08-2024",
+                    "artist": {"name": "Artist A"},
+                    "venue": {"name": "Festival Grounds", "city": {"name": "Austin", "country": {"code": "US"}}},
+                    "sets": {"set": [{"song": [{"name": "Song A"}]}]},
+                },
+                {
+                    "id": "festival-artist-b",
+                    "eventDate": "15-08-2024",
+                    "artist": {"name": "Artist B"},
+                    "venue": {"name": "Festival Grounds", "city": {"name": "Austin", "country": {"code": "US"}}},
+                    "sets": {"set": [{"song": [{"name": "Song B"}]}]},
+                },
+            ]
+        }
+
+        with patch.object(self.client, "_fetch_setlists_raw", return_value=festival):
+            matched = self.client.search_by_venue_and_date(
+                event_date="2024-08-15",
+                venue_name="Festival Grounds",
+                city_name="Austin",
+            )
+
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched.headliner_artist, "Artist A")
+        self.assertEqual(matched.lineup_artists, ["Artist A", "Artist B"])
+        self.assertEqual(
+            matched.raw_setlist_data["_stagesync_lineup_setlists"],
+            [
+                {"artist": "Artist A", "songs": ["Song A"]},
+                {"artist": "Artist B", "songs": ["Song B"]},
+            ],
+        )
+
+    def test_search_concerts_applies_manual_filters_and_returns_all_records(self) -> None:
+        payload = {
+            "setlist": [{
+                "id": "event-1",
+                "eventDate": "15-08-2024",
+                "artist": {"name": "Artist A"},
+                "venue": {"id": "venue-1", "name": "The Venue", "city": {"name": "Austin", "country": {"code": "US"}}},
+                "tour": {"name": "Summer Tour"},
+                "sets": {"set": [{"song": [{"name": "Song A"}]}]},
+                "url": "https://www.setlist.fm/setlist/event-1",
+            }]
+        }
+        with patch.object(self.client, "_fetch_setlists_raw", return_value=payload) as fetch:
+            results = self.client.search_concerts(
+                event_date="2024-08-15",
+                artist_name="Artist A",
+                venue_name="The Venue",
+                tour_name="Summer Tour",
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].setlist_fm_event_id, "event-1")
+        self.assertEqual(results[0].tour_name, "Summer Tour")
+        fetch.assert_called_once_with({
+            "date": "15-08-2024",
+            "artistName": "Artist A",
+            "venueName": "The Venue",
+            "tourName": "Summer Tour",
+            "p": "1",
+        })
 
 
 if __name__ == "__main__":

@@ -65,3 +65,64 @@ class MusicBrainzClient:
                 "id": recording.get("id", ""),
             })
         return results
+
+    def get_discography(
+        self,
+        artist_name: str,
+        limit: int = 100,
+        raise_on_error: bool = False,
+    ) -> List[Dict[str, str]]:
+        """Return distinct recording titles for the closest MusicBrainz artist."""
+        artist = artist_name.strip()
+        if not artist:
+            return []
+
+        try:
+            artist_response = requests.get(
+                f"{MUSICBRAINZ_API_BASE}/artist",
+                params={"query": f'artist:"{artist.replace(chr(34), chr(92) + chr(34))}"', "fmt": "json", "limit": 5},
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "StageSync/1.0 (https://github.com/kasperjay/stagesync)",
+                },
+                timeout=self.timeout,
+            )
+            artist_response.raise_for_status()
+            artists = artist_response.json().get("artists", [])
+            if not artists:
+                return []
+            artist_id = artists[0].get("id")
+            if not artist_id:
+                return []
+
+            recording_response = requests.get(
+                f"{MUSICBRAINZ_API_BASE}/recording",
+                params={"artist": artist_id, "fmt": "json", "limit": min(max(limit, 1), 100)},
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "StageSync/1.0 (https://github.com/kasperjay/stagesync)",
+                },
+                timeout=self.timeout,
+            )
+            recording_response.raise_for_status()
+            recordings = recording_response.json().get("recordings", [])
+        except Exception as exc:
+            logger.warning("MusicBrainz discography lookup failed for %s: %s", artist, exc)
+            if raise_on_error:
+                raise RuntimeError(f"MusicBrainz discography lookup failed: {exc}") from exc
+            return []
+
+        results: List[Dict[str, str]] = []
+        seen = set()
+        for recording in recordings:
+            title = (recording.get("title") or "").strip()
+            if not title or title.casefold() in seen:
+                continue
+            seen.add(title.casefold())
+            results.append({
+                "title": title,
+                "artist": artist,
+                "source": "musicbrainz",
+                "id": recording.get("id", ""),
+            })
+        return results

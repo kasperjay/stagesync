@@ -31,6 +31,7 @@ from stagesync.database.models import (
 )
 from stagesync.ingestion.google_drive import (
     GoogleDriveClient,
+    _parse_date,
     extract_folder_id,
     is_likely_video_file,
 )
@@ -54,6 +55,8 @@ from stagesync.publisher.resumable_upload import ResumableUploader, UploadResult
 from stagesync.security import sanitize_filename, validate_safe_path
 
 logger = logging.getLogger(__name__)
+
+ProgressCallback = Callable[[int, int, str], None]
 
 
 class PipelineCoordinator:
@@ -288,6 +291,7 @@ class PipelineCoordinator:
         album_id: Optional[str] = None,
         dry_run: bool = False,
         limit: int = 50,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> List[Video]:
         """Scan Google Photos for video items matching date range/days and catalog new discoveries."""
         logger.info(
@@ -312,7 +316,12 @@ class PipelineCoordinator:
             logger.error("Failed to query Google Photos: %s", e)
             raise RuntimeError(f"Google Photos query failed: {e}") from e
 
-        for item in items:
+        if progress_callback:
+            progress_callback(0, len(items), f"Found {len(items)} Google Photos item(s)")
+
+        for item_index, item in enumerate(items, start=1):
+            if progress_callback:
+                progress_callback(item_index, len(items), f"Processing Google Photos item {item_index} of {len(items)}")
             media_id = item.get("id")
             if not media_id:
                 continue
@@ -374,6 +383,16 @@ class PipelineCoordinator:
                     video.file_hash_sha256 = sha_hash
                     video.file_size_bytes = file_path.stat().st_size
                     video.processing_status = VideoStatus.DOWNLOADED
+                    duplicate = self.db.get_video_by_file_hash(sha_hash)
+                    if duplicate and duplicate.source_photo_id != media_id:
+                        with contextlib.suppress(OSError):
+                            file_path.unlink()
+                        logger.info(
+                            "Skipping duplicate Google Photos video %s; content already cataloged as %s",
+                            clean_filename,
+                            duplicate.id,
+                        )
+                        continue
                 except Exception as e:
                     logger.error("Download failed for %s: %s", media_id, e)
                     video.processing_status = VideoStatus.FAILED
@@ -445,6 +464,16 @@ class PipelineCoordinator:
                     video.file_hash_sha256 = sha_hash
                     video.file_size_bytes = file_path.stat().st_size
                     video.processing_status = VideoStatus.DOWNLOADED
+                    duplicate = self.db.get_video_by_file_hash(sha_hash)
+                    if duplicate and duplicate.source_photo_id != media_id:
+                        with contextlib.suppress(OSError):
+                            file_path.unlink()
+                        logger.info(
+                            "Skipping duplicate Picker video %s; content already cataloged as %s",
+                            clean_filename,
+                            duplicate.id,
+                        )
+                        continue
                 except Exception as e:
                     logger.error("Download failed for picker item %s: %s", media_id, e)
                     video.processing_status = VideoStatus.FAILED
@@ -462,6 +491,7 @@ class PipelineCoordinator:
         folder_id: Optional[str] = None,
         dry_run: bool = False,
         limit: int = 50,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> List[Video]:
         """Scan Google Drive for video files matching date range and catalog discoveries."""
         clean_folder = extract_folder_id(folder_id)
@@ -475,12 +505,22 @@ class PipelineCoordinator:
         )
         discovered_videos: List[Video] = []
         target_limit = limit or 50
+        parsed_start = _parse_date(start_date)
+        parsed_end = _parse_date(end_date)
+        if not parsed_start and days:
+            parsed_start = datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=days)
+        if parsed_start and not parsed_end:
+            parsed_end = datetime.datetime.now(datetime.timezone.utc).date()
+        if parsed_start and parsed_end and parsed_start > parsed_end:
+            parsed_start, parsed_end = parsed_end, parsed_start
         page_token: Optional[str] = None
         all_items: List[Dict[str, Any]] = []
 
+        scan_all_matching_items = bool(clean_folder or (parsed_start and parsed_end))
+
         try:
-            while len(all_items) < target_limit:
-                page_size = min(100, target_limit - len(all_items))
+            while scan_all_matching_items or len(all_items) < target_limit:
+                page_size = 100
                 items_page, next_token = self.drive_client.list_videos(
                     start_date=start_date,
                     end_date=end_date,
@@ -489,14 +529,21 @@ class PipelineCoordinator:
                     page_size=page_size,
                     page_token=page_token,
                 )
-                all_items.extend(items_page)
-                if not next_token or not items_page:
+                if scan_all_matching_items:
+                    all_items.extend(items_page)
+                else:
+                    remaining = target_limit - len(all_items)
+                    all_items.extend(items_page[:remaining])
+                if not next_token:
                     break
                 page_token = next_token
         except Exception as e:
             logger.error("Failed to query Google Drive: %s", e)
             if not all_items:
                 raise RuntimeError(f"Google Drive query failed: {e}") from e
+
+        if progress_callback:
+            progress_callback(0, len(all_items), f"Found {len(all_items)} Google Drive candidate(s)")
 
         # Fetch GPS photo samples from target Drive folder for neighbor correlation
         drive_photo_samples: List[PhotoLocationSample] = []
@@ -508,7 +555,9 @@ class PipelineCoordinator:
             except Exception as e:
                 logger.debug("Drive folder photo pre-indexing skipped: %s", e)
 
-        for item in all_items:
+        for item_index, item in enumerate(all_items, start=1):
+            if progress_callback:
+                progress_callback(item_index, len(all_items), f"Processing Google Drive item {item_index} of {len(all_items)}")
             file_id = item.get("id")
             if not file_id:
                 continue
@@ -516,6 +565,8 @@ class PipelineCoordinator:
             source_id = f"drive_{file_id}"
             existing = self.db.get_video_by_source_id(source_id)
             if existing:
+                if existing.processing_status == VideoStatus.REJECTED:
+                    continue
                 # If already downloaded and available locally, skip
                 if existing.file_path and Path(existing.file_path).exists():
                     continue
@@ -584,7 +635,7 @@ class PipelineCoordinator:
                     device_make=device_make,
                     device_model=device_model,
                     file_size_bytes=file_size,
-                    recorded_at_utc=item.get("createdTime"),
+                    recorded_at_utc=video_meta.get("time") or image_meta.get("time"),
                     processing_status=VideoStatus.DISCOVERED,
                 )
 
@@ -609,16 +660,45 @@ class PipelineCoordinator:
                         video.longitude = parsed_meta.longitude or video.longitude
                         if parsed_meta.recorded_at_utc:
                             video.recorded_at_utc = parsed_meta.recorded_at_utc
+                        if parsed_meta.recorded_at_local:
+                            video.recorded_at_local = parsed_meta.recorded_at_local
+
+                    duplicate = self.db.get_video_by_file_hash(sha_hash)
+                    if duplicate and duplicate.id != video.id:
+                        with contextlib.suppress(OSError):
+                            file_path.unlink()
+                        logger.info(
+                            "Skipping duplicate Drive video %s; content already cataloged as %s",
+                            clean_filename,
+                            duplicate.id,
+                        )
+                        continue
                 except Exception as e:
                     logger.error("Download failed for Drive file %s: %s", file_id, e)
                     video.processing_status = VideoStatus.FAILED
+
+                if parsed_start and parsed_end:
+                    recorded_date = _parse_date(video.recorded_at_local or video.recorded_at_utc)
+                    if recorded_date and not (parsed_start <= recorded_date <= parsed_end):
+                        with contextlib.suppress(OSError):
+                            Path(video.file_path or "").unlink()
+                        logger.debug(
+                            "Skipping Drive video outside recording date range: %s (%s)",
+                            clean_filename,
+                            recorded_date,
+                        )
+                        continue
 
             saved = self.db.save_video(video)
             discovered_videos.append(saved)
 
         return discovered_videos
 
-    def scan_local_directory(self, directory_path: Union[str, Path]) -> List[Video]:
+    def scan_local_directory(
+        self,
+        directory_path: Union[str, Path],
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> List[Video]:
         """Scan a local directory for video files and ingest into pipeline."""
         target_dir = Path(directory_path).resolve()
         if not target_dir.exists() or not target_dir.is_dir():
@@ -630,7 +710,16 @@ class PipelineCoordinator:
         video_extensions = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
         found_videos: List[Video] = []
 
-        for p in target_dir.glob("**/*"):
+        video_paths = [
+            p for p in target_dir.glob("**/*")
+            if p.is_file() and p.suffix.lower() in video_extensions
+        ]
+        if progress_callback:
+            progress_callback(0, len(video_paths), f"Found {len(video_paths)} local video file(s)")
+
+        for video_index, p in enumerate(video_paths, start=1):
+            if progress_callback:
+                progress_callback(video_index, len(video_paths), f"Processing local video {video_index} of {len(video_paths)}")
             if p.is_file() and p.suffix.lower() in video_extensions:
                 source_id = f"local_{hashlib.md5(str(p).encode()).hexdigest()[:16]}"
                 existing = self.db.get_video_by_source_id(source_id)
@@ -654,6 +743,24 @@ class PipelineCoordinator:
                     v.longitude = parsed_meta.longitude
                     if parsed_meta.recorded_at_utc:
                         v.recorded_at_utc = parsed_meta.recorded_at_utc
+                    if parsed_meta.file_hash_sha256:
+                        v.file_hash_sha256 = parsed_meta.file_hash_sha256
+
+                if not v.file_hash_sha256:
+                    digest = hashlib.sha256()
+                    with p.open("rb") as file_handle:
+                        for chunk in iter(lambda: file_handle.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                    v.file_hash_sha256 = digest.hexdigest()
+
+                duplicate = self.db.get_video_by_file_hash(v.file_hash_sha256)
+                if duplicate and duplicate.source_photo_id != v.source_photo_id:
+                    logger.info(
+                        "Skipping duplicate local video %s; content already cataloged as %s",
+                        v.filename,
+                        duplicate.id,
+                    )
+                    continue
 
                 if self._is_short_clip(v.duration_seconds):
                     logger.debug(
@@ -954,6 +1061,7 @@ class PipelineCoordinator:
         track_number: Optional[int] = None
         lyrics_snippet: Optional[str] = None
         raw_payload: Dict[str, Any] = {}
+        suggestion_only = False
 
         if audio_clip_paths and all(path.exists() for path in audio_clip_paths):
             candidate_song_list = self._setlist_song_titles(matched_concert)
@@ -1006,8 +1114,10 @@ class PipelineCoordinator:
             artist_for_ai = matched_concert.headliner_artist if matched_concert else detected_artist
 
             if (not setlist_verified or confidence < 0.85) and (candidate_song_list or artist_for_ai):
+                ai_res: Optional[AIAudioJudgeResult] = None
+
                 def step_llm():
-                    nonlocal detected_song, detected_artist, confidence, service_used
+                    nonlocal ai_res, detected_song, detected_artist, confidence, service_used
                     nonlocal setlist_verified, track_number, lyrics_snippet, raw_payload
                     ai_res = self.ai_audio_judge.evaluate_live_clip(
                         audio_path=audio_clip_path,
@@ -1015,6 +1125,7 @@ class PipelineCoordinator:
                         artist_name=artist_for_ai or "Live Artist",
                         venue_name=resolved_venue.name if resolved_venue else "Concert Venue",
                         event_date=matched_concert.event_date if matched_concert else "",
+                        allow_open_catalog=bool(artist_for_ai),
                     )
                     if ai_res.matched:
                         detected_song = ai_res.song_title
@@ -1029,6 +1140,26 @@ class PipelineCoordinator:
                     return StepStatus.SKIPPED, {"message": ai_res.reasoning or "AI could not disambiguate"}, None
 
                 self._audit_step(video.id, PipelineStep.LLM_DISAMBIGUATION, step_llm)
+
+                if not detected_song and ai_res and ai_res.lyrics_detected and artist_for_ai:
+                    discography = self.musicbrainz_client.get_discography(artist_for_ai)
+                    lyrics_match = self.ai_audio_judge.match_lyrics_to_discography(
+                        lyrics=ai_res.lyrics_detected,
+                        artist_name=artist_for_ai,
+                        discography=[entry["title"] for entry in discography],
+                    )
+                    if lyrics_match.matched and self._usable_song(lyrics_match.song_title):
+                        detected_song = self._usable_song(lyrics_match.song_title)
+                        detected_artist = artist_for_ai
+                        confidence = min(lyrics_match.confidence, 0.89)
+                        service_used = "lyrics_discography"
+                        lyrics_snippet = ai_res.lyrics_detected
+                        raw_payload = {
+                            "lyrics_match": lyrics_match.model_dump(),
+                            "discography_source": "musicbrainz",
+                            "discography_candidates": discography,
+                        }
+                        suggestion_only = True
 
         # ---------------------------------------------------------------------
         # Step 5: Persist Identification Record
@@ -1046,6 +1177,7 @@ class PipelineCoordinator:
                 track_number_in_setlist=track_number,
                 identified_lyrics_snippet=lyrics_snippet,
                 raw_service_payload=raw_payload,
+                status="SUGGESTED" if suggestion_only else "CONFIRMED",
             )
             self.db.save_identification(ident)
 
@@ -1055,7 +1187,7 @@ class PipelineCoordinator:
         dur = video.duration_seconds or 0.0
         if dur < self.settings.min_duration_seconds:
             video.processing_status = VideoStatus.REJECTED
-        elif confidence >= self.settings.auto_approve_threshold and video.is_concert_candidate:
+        elif confidence >= self.settings.auto_approve_threshold and video.is_concert_candidate and not suggestion_only:
             video.processing_status = VideoStatus.APPROVED
         elif (confidence >= 0.50 or matched_concert) and video.is_concert_candidate:
             video.processing_status = VideoStatus.PENDING_REVIEW
@@ -1070,24 +1202,24 @@ class PipelineCoordinator:
         # Step 7: Pre-generate YouTube Draft Metadata
         # ---------------------------------------------------------------------
         ident_record = self.db.get_identification_by_video_id(video.id)
-        yt_meta = self.metadata_gen.generate_metadata(
-            video=video,
-            identification=ident_record,
-            concert=matched_concert,
-            venue=resolved_venue,
-        )
-
-        upload_job = YouTubeUpload(
-            video_id=video.id,
-            title=yt_meta.title,
-            description=yt_meta.description,
-            tags=yt_meta.tags,
-            category_id=yt_meta.category_id,
-            privacy_status=PrivacyStatus(self.settings.default_privacy),
-            upload_status="DRAFT",
-            total_bytes=video.file_size_bytes or 0,
-        )
-        self.db.save_youtube_upload(upload_job)
+        if not suggestion_only:
+            yt_meta = self.metadata_gen.generate_metadata(
+                video=video,
+                identification=ident_record,
+                concert=matched_concert,
+                venue=resolved_venue,
+            )
+            upload_job = YouTubeUpload(
+                video_id=video.id,
+                title=yt_meta.title,
+                description=yt_meta.description,
+                tags=yt_meta.tags,
+                category_id=yt_meta.category_id,
+                privacy_status=PrivacyStatus(self.settings.default_privacy),
+                upload_status="DRAFT",
+                total_bytes=video.file_size_bytes or 0,
+            )
+            self.db.save_youtube_upload(upload_job)
 
         logger.info(
             "Video %s processed successfully -> Status: %s (Confidence: %.2f)",
@@ -1152,6 +1284,7 @@ class PipelineCoordinator:
     def approve_video(
         self,
         video_id: str,
+        title_override: Optional[str] = None,
         song_title_override: Optional[str] = None,
         artist_override: Optional[str] = None,
         privacy_override: Optional[PrivacyStatus] = None,
@@ -1162,6 +1295,8 @@ class PipelineCoordinator:
             raise ValueError(f"Video {video_id} not found.")
 
         ident = self.db.get_identification_by_video_id(video_id)
+        if ident and ident.status == "SUGGESTED":
+            raise ValueError("This video has a lyrics-based suggestion. Confirm the suggested song before approving it.")
         if ident and (song_title_override or artist_override):
             if song_title_override:
                 ident.detected_song_title = song_title_override
@@ -1179,19 +1314,59 @@ class PipelineCoordinator:
 
         # Regenerate YouTube metadata with updated values
         meta = self.metadata_gen.generate_metadata(video, ident, concert, venue)
+        resolved_title = (
+            title_override.strip()[: self.metadata_gen.MAX_TITLE_LENGTH]
+            if title_override and title_override.strip()
+            else meta.title
+        )
+        resolved_privacy = privacy_override or PrivacyStatus(self.settings.default_privacy)
+
         upload_job = self.db.get_youtube_upload_by_video_id(video_id)
         if upload_job:
-            upload_job.title = meta.title
+            upload_job.title = resolved_title
             upload_job.description = meta.description
             upload_job.tags = meta.tags
             if privacy_override:
                 upload_job.privacy_status = privacy_override
             upload_job.upload_status = "QUEUED"
-            self.db.save_youtube_upload(upload_job)
+            upload_job.upload_resumable_uri = None
+            upload_job.error_message = None
+        else:
+            upload_job = YouTubeUpload(
+                video_id=video_id,
+                title=resolved_title,
+                description=meta.description,
+                tags=meta.tags,
+                category_id=meta.category_id,
+                privacy_status=resolved_privacy,
+                upload_status="QUEUED",
+                total_bytes=video.file_size_bytes or 0,
+            )
+        self.db.save_youtube_upload(upload_job)
 
         video.processing_status = VideoStatus.APPROVED
         self.db.save_video(video)
         return video
+
+    def confirm_suggested_match(
+        self,
+        video_id: str,
+        title_override: Optional[str] = None,
+        privacy_override: Optional[PrivacyStatus] = None,
+    ) -> Video:
+        """Promote a reviewed lyrics suggestion, then generate metadata and queue upload."""
+        ident = self.db.get_identification_by_video_id(video_id)
+        if not ident or ident.status != "SUGGESTED":
+            raise ValueError("No pending lyrics-based suggestion exists for this video.")
+        if title_override:
+            ident.detected_song_title = title_override.strip()
+        ident.status = "CONFIRMED"
+        self.db.save_identification(ident)
+        return self.approve_video(
+            video_id=video_id,
+            title_override=title_override,
+            privacy_override=privacy_override,
+        )
 
     def reject_video(self, video_id: str) -> Video:
         """Reject video candidate."""
@@ -1201,6 +1376,30 @@ class PipelineCoordinator:
         video.processing_status = VideoStatus.REJECTED
         self.db.save_video(video)
         return video
+
+    def delete_video(self, video_id: str) -> Dict[str, Any]:
+        """Permanently remove a rejected video and its cached media."""
+        video = self.db.get_video(video_id)
+        if not video:
+            raise ValueError(f"Video {video_id} not found.")
+        if video.processing_status != VideoStatus.REJECTED:
+            raise ValueError("Only rejected videos can be permanently deleted.")
+
+        if not self.db.delete_video(video_id):
+            raise ValueError(f"Video {video_id} could not be deleted.")
+
+        paths: List[Path] = []
+        if video.file_path:
+            paths.append(Path(video.file_path))
+        paths.extend(self.download_dir.glob(f"{video_id}*"))
+        paths.extend(self.thumbnail_extractor.cache_dir.glob(f"{video_id}*"))
+        for path in paths:
+            try:
+                if path.is_file():
+                    path.unlink()
+            except OSError as err:
+                logger.warning("Could not delete cached video file %s: %s", path, err)
+        return {"id": video_id, "filename": video.filename}
 
     def purge_rejected_videos(
         self,
@@ -1251,10 +1450,16 @@ class PipelineCoordinator:
 
         # 1. Resolve or create venue
         venue: Optional[Venue] = None
+        resolved_setlist_fm_venue_id = setlist_fm_venue_id
         if setlist_fm_venue_id:
             venue = self.db.get_venue_by_setlist_id(setlist_fm_venue_id)
+            if venue and venue_name.strip().casefold() != venue.name.strip().casefold():
+                venue = None
+                resolved_setlist_fm_venue_id = None
         if not venue and latitude is not None and longitude is not None:
             venue = self.db.find_venue_by_coords(latitude, longitude, tolerance=0.005)
+            if venue and venue_name.strip().casefold() != venue.name.strip().casefold():
+                venue = None
         if not venue:
             v_matches = self.db.search_venues(query=venue_name, city=city, limit=1)
             if v_matches:
@@ -1268,7 +1473,7 @@ class PipelineCoordinator:
                 country_code=country_code,
                 latitude=latitude,
                 longitude=longitude,
-                setlist_fm_venue_id=setlist_fm_venue_id,
+                setlist_fm_venue_id=resolved_setlist_fm_venue_id,
                 osm_id=osm_id,
                 formatted_address=formatted_address or f"{venue_name}, {city or ''}",
             )
@@ -1298,25 +1503,28 @@ class PipelineCoordinator:
         matched_concert: Optional[Concert] = None
         res: Optional[MatchedConcert] = None
         if event_date_str:
-            res = self.setlist_client.search_by_venue_and_date(
-                event_date=event_date_str,
-                venue_name=venue.name,
-                city_name=venue.city,
-            )
-            # Try adjacent UTC date if recorded near midnight
-            if not res and video.recorded_at_utc and video.recorded_at_utc[:10] != event_date_str:
+            try:
                 res = self.setlist_client.search_by_venue_and_date(
-                    event_date=video.recorded_at_utc[:10],
+                    event_date=event_date_str,
                     venue_name=venue.name,
                     city_name=venue.city,
                 )
-            # Fallback search by city with venue name hint
-            if not res and venue.city:
-                res = self.setlist_client.search_by_city_and_date(
-                    event_date=event_date_str,
-                    city_name=venue.city,
-                    venue_name_hint=venue.name,
-                )
+                # Try adjacent UTC date if recorded near midnight
+                if not res and video.recorded_at_utc and video.recorded_at_utc[:10] != event_date_str:
+                    res = self.setlist_client.search_by_venue_and_date(
+                        event_date=video.recorded_at_utc[:10],
+                        venue_name=venue.name,
+                        city_name=venue.city,
+                    )
+                # Fallback search by city with venue name hint
+                if not res and venue.city:
+                    res = self.setlist_client.search_by_city_and_date(
+                        event_date=event_date_str,
+                        city_name=venue.city,
+                        venue_name_hint=venue.name,
+                    )
+            except Exception as exc:
+                logger.warning("Setlist lookup failed while assigning venue to %s: %s", video.id, exc)
 
         if res:
             if res.venue_name and res.venue_name != "Unknown Venue":
@@ -1339,23 +1547,46 @@ class PipelineCoordinator:
 
         # 4. Update or create identification
         ident = self.db.get_identification_by_video_id(video.id)
+        existing_concert = self.db.get_concert(ident.concert_id) if ident and ident.concert_id else None
+        linked_concert = matched_concert or existing_concert
+        if linked_concert and not matched_concert:
+            linked_concert.venue_id = venue.id
+            linked_concert = self.db.save_concert(linked_concert)
+        elif not linked_concert and event_date_str:
+            linked_concert = self.db.save_concert(
+                Concert(
+                    venue_id=venue.id,
+                    headliner_artist="Live Artist",
+                    event_date=event_date_str,
+                )
+            )
+        requires_band_selection = bool(
+            linked_concert
+            and len({artist.casefold() for artist in linked_concert.lineup_artists if artist.strip()}) > 1
+        )
+        matched_artist = "Live Artist" if requires_band_selection else (
+            linked_concert.headliner_artist if linked_concert else "Live Artist"
+        )
         if not ident:
             ident = Identification(
                 video_id=video.id,
-                concert_id=matched_concert.id if matched_concert else None,
+                concert_id=linked_concert.id if linked_concert else None,
                 detected_song_title="Live Performance",
-                detected_artist=matched_concert.headliner_artist if matched_concert else "Live Artist",
+                detected_artist=matched_artist,
                 match_confidence=0.85 if matched_concert else 0.40,
                 fingerprint_service="venue_user_assisted",
                 setlist_verified=bool(matched_concert),
             )
         else:
-            if matched_concert:
-                ident.concert_id = matched_concert.id
-                if not ident.detected_artist or ident.detected_artist in ("Live Artist", "Unknown Artist", "Unknown"):
-                    ident.detected_artist = matched_concert.headliner_artist
-                ident.setlist_verified = True
-                ident.match_confidence = max(ident.match_confidence, 0.85)
+            if linked_concert:
+                ident.concert_id = linked_concert.id
+                if requires_band_selection:
+                    ident.detected_artist = "Live Artist"
+                elif not ident.detected_artist or ident.detected_artist in ("Live Artist", "Unknown Artist", "Unknown"):
+                    ident.detected_artist = linked_concert.headliner_artist
+                if matched_concert:
+                    ident.setlist_verified = True
+                    ident.match_confidence = max(ident.match_confidence, 0.85)
             ident.status = "USER_ASSISTED"
         self.db.save_identification(ident)
 
@@ -1367,7 +1598,7 @@ class PipelineCoordinator:
         yt_meta = self.metadata_gen.generate_metadata(
             video=video,
             identification=ident,
-            concert=matched_concert,
+            concert=linked_concert,
             venue=venue,
         )
         upload_job = self.db.get_youtube_upload_by_video_id(video.id)
@@ -1388,7 +1619,139 @@ class PipelineCoordinator:
             upload_job.tags = yt_meta.tags
         self.db.save_youtube_upload(upload_job)
 
-        return video, matched_concert, ident
+        return video, linked_concert, ident
+
+    def attach_setlist_concert(
+        self,
+        video_id: str,
+        matched: MatchedConcert,
+    ) -> Tuple[Video, Concert, Identification]:
+        """Attach a user-selected Setlist.fm concert without running another lookup."""
+        video = self.db.get_video(video_id)
+        if not video:
+            raise ValueError(f"Video {video_id} not found.")
+
+        venue = self.db.get_venue_by_setlist_id(matched.venue_id) if matched.venue_id else None
+        if not venue:
+            venue = Venue(
+                name=matched.venue_name,
+                city=matched.city,
+                state_province=matched.state_province,
+                country_code=matched.country_code or "US",
+                latitude=matched.latitude or 0.0,
+                longitude=matched.longitude or 0.0,
+                setlist_fm_venue_id=matched.venue_id,
+                formatted_address=f"{matched.venue_name}, {matched.city}",
+            )
+        else:
+            venue.name = matched.venue_name or venue.name
+            venue.city = matched.city or venue.city
+            venue.state_province = matched.state_province or venue.state_province
+            venue.setlist_fm_venue_id = matched.venue_id or venue.setlist_fm_venue_id
+        venue = self.db.save_venue(venue)
+
+        concert = self.db.save_concert(Concert(
+            venue_id=venue.id,
+            headliner_artist=matched.headliner_artist,
+            lineup_artists=matched.lineup_artists,
+            tour_name=matched.tour_name,
+            event_date=matched.event_date,
+            setlist_fm_event_id=matched.setlist_fm_event_id,
+            setlist_data=matched.raw_setlist_data,
+            source_url=matched.source_url,
+        ))
+
+        ident = self.db.get_identification_by_video_id(video.id)
+        if not ident:
+            ident = Identification(
+                video_id=video.id,
+                detected_song_title="Live Performance",
+                detected_artist=matched.headliner_artist,
+                match_confidence=0.90,
+                fingerprint_service="setlist_fm_manual",
+            )
+        ident.concert_id = concert.id
+        if not ident.detected_song_title or ident.detected_song_title in {"Live Performance", "Unknown Song"}:
+            ident.detected_artist = matched.headliner_artist
+        ident.setlist_verified = True
+        ident.match_confidence = max(ident.match_confidence, 0.90)
+        ident.status = "USER_ASSISTED"
+        self.db.save_identification(ident)
+
+        video.is_concert_candidate = True
+        video.processing_status = VideoStatus.PENDING_REVIEW
+        if video.latitude is None and matched.latitude is not None:
+            video.latitude = matched.latitude
+            video.longitude = matched.longitude
+        self.db.save_video(video)
+
+        yt_meta = self.metadata_gen.generate_metadata(video=video, identification=ident, concert=concert, venue=venue)
+        upload_job = self.db.get_youtube_upload_by_video_id(video.id)
+        if not upload_job:
+            upload_job = YouTubeUpload(
+                video_id=video.id,
+                title=yt_meta.title,
+                description=yt_meta.description,
+                tags=yt_meta.tags,
+                category_id=yt_meta.category_id,
+                privacy_status=PrivacyStatus(self.settings.default_privacy),
+                upload_status="DRAFT",
+                total_bytes=video.file_size_bytes or 0,
+            )
+        else:
+            upload_job.title = yt_meta.title
+            upload_job.description = yt_meta.description
+            upload_job.tags = yt_meta.tags
+        self.db.save_youtube_upload(upload_job)
+        return video, concert, ident
+
+    def apply_venue_to_date(
+        self,
+        source_video_id: str,
+        recorded_date: str,
+        venue_name: str,
+        city: Optional[str] = None,
+        state_province: Optional[str] = None,
+        country_code: str = "US",
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
+        setlist_fm_venue_id: Optional[str] = None,
+        osm_id: Optional[str] = None,
+        formatted_address: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Apply a manually selected venue to other videos recorded on one date."""
+        if not recorded_date:
+            raise ValueError("recorded_date is required")
+
+        candidates = []
+        for video in self.db.list_videos(limit=1000):
+            local_date = video.recorded_at_local[:10] if video.recorded_at_local else None
+            utc_date = video.recorded_at_utc[:10] if video.recorded_at_utc else None
+            if video.id != source_video_id and recorded_date in {local_date, utc_date}:
+                candidates.append(video)
+
+        applied = []
+        errors = []
+        for video in candidates:
+            try:
+                updated, _, _ = self.reidentify_video_with_venue(
+                    video_id=video.id,
+                    venue_name=venue_name,
+                    city=city,
+                    state_province=state_province,
+                    country_code=country_code,
+                    latitude=latitude,
+                    longitude=longitude,
+                    setlist_fm_venue_id=setlist_fm_venue_id,
+                    osm_id=osm_id,
+                    formatted_address=formatted_address,
+                )
+                applied.append(updated.id)
+            except Exception as exc:
+                logger.exception("Failed applying venue to video %s: %s", video.id, exc)
+                errors.append({"id": video.id, "filename": video.filename, "error": str(exc)})
+
+        return {"recorded_date": recorded_date, "applied_ids": applied, "errors": errors}
 
     def reidentify_video_with_band(
         self,
@@ -1407,18 +1770,19 @@ class PipelineCoordinator:
 
         ident = self.db.get_identification_by_video_id(video.id)
         concert: Optional[Concert] = None
+        venue: Optional[Venue] = None
         if ident and ident.concert_id:
             concert = self.db.get_concert(ident.concert_id)
 
         # If artist not in concert lineup, register it
         if concert:
+            venue = self.db.get_venue(concert.venue_id) if concert.venue_id else None
             if artist_clean not in concert.lineup_artists:
                 concert.lineup_artists.append(artist_clean)
                 concert = self.db.save_concert(concert)
 
         artist_setlist: Optional[MatchedConcert] = None
         if not song_title and concert:
-            venue = self.db.get_venue(concert.venue_id) if concert.venue_id else None
             if (
                 artist_clean.lower() != concert.headliner_artist.lower()
                 and venue
@@ -1955,7 +2319,6 @@ class PipelineCoordinator:
                 "video": video,
             }
 
-        # 7B. Outcome: ERROR (when no matcher could complete cleanly)
         shazam_failed = bool(shazam_unavailable or shazam_errors)
         gemini_failed_or_missing = bool(gemini_error or not gemini_ran)
         if shazam_failed and gemini_failed_or_missing:
@@ -1968,13 +2331,18 @@ class PipelineCoordinator:
                 err_parts.append(gemini_error)
             elif not gemini_ran:
                 err_parts.append("Gemini AI skipped (performing band is unknown — select the band first)")
+            provider_message = "Song matching services are temporarily unavailable; retry this clip in a moment."
             return {
-                "success": False,
+                "success": True,
                 "matched": False,
-                "outcome": "error",
+                "outcome": "no_match",
                 "video_id": video.id,
                 "filename": video.filename,
-                "error": " • ".join(err_parts) or "Song matching services failed.",
+                "song_title": None,
+                "artist": final_artist or None,
+                "confidence": 0.0,
+                "warnings": err_parts,
+                "message": provider_message,
                 "diagnostics": diagnostics,
                 "video": video,
             }

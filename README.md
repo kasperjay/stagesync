@@ -16,6 +16,7 @@ StageSync connects your Google Photos cloud storage directly to YouTube, transfo
   - Acoustic fingerprinting via `shazamio`.
   - Setlist-constrained AI audio matcher (Gemini 2.5 Flash) to identify live tracks even amidst crowd roar, altered tempos, and noisy live acoustics.
 - **Interactive Review CLI**: Rich terminal TUI for verifying, editing, or rejecting candidates before upload.
+- **Manual Setlist.fm Show Search**: When automatic matching misses, search by date, artist, venue, city, or tour and attach the exact concert to a clip from the web review drawer.
 - **Resumable 8MB YouTube Uploads**: Resilient chunked uploads to YouTube Data API v3 with automatic retry backoff and daily quota preservation guardrails.
 - **SQLite WAL Engine**: Zero-setup local SQLite database with Write-Ahead Logging and audit logging for pipeline runs.
 

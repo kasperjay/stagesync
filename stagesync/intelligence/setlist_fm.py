@@ -128,7 +128,8 @@ class SetlistFmClient:
                 best = s
                 break
 
-        return self.parse_setlist_payload(best, event_date, all_setlists=setlists)
+        matched = self.parse_setlist_payload(best, event_date, all_setlists=setlists)
+        return matched
 
     def search_by_city_and_date(
         self,
@@ -163,10 +164,16 @@ class SetlistFmClient:
             # If venue_name_hint is provided, match by venue name
             if venue_name_hint:
                 hint_lower = venue_name_hint.lower().strip()
+                venue_matches = []
                 for s in setlists:
                     v_name = s.get("venue", {}).get("name", "").lower()
                     if hint_lower in v_name or v_name in hint_lower:
-                        return self.parse_setlist_payload(s, event_date, all_setlists=setlists)
+                        venue_matches.append(s)
+                if venue_matches:
+                    matched = self.parse_setlist_payload(
+                        venue_matches[0], event_date, all_setlists=venue_matches
+                    )
+                    return matched
 
             # If artist_name was specified and matched
             if artist_name:
@@ -196,6 +203,61 @@ class SetlistFmClient:
         if city_hint:
             return self.search_by_city_and_date(event_date=event_date, city_name=city_hint, venue_name_hint=venue_hint)
         return None
+
+    def search_concerts(
+        self,
+        event_date: Optional[str] = None,
+        artist_name: Optional[str] = None,
+        venue_name: Optional[str] = None,
+        city_name: Optional[str] = None,
+        tour_name: Optional[str] = None,
+        state: Optional[str] = None,
+        country_code: Optional[str] = None,
+        max_pages: int = 3,
+        max_results: int = 30,
+    ) -> List[MatchedConcert]:
+        """Search Setlist.fm for selectable concert records using any filters."""
+        if not self.api_key:
+            return []
+
+        filters = (event_date, artist_name, venue_name, city_name, tour_name, state, country_code)
+        if not any(value and str(value).strip() for value in filters):
+            return []
+
+        params: Dict[str, str] = {}
+        if event_date:
+            params["date"] = self._format_date_for_api(event_date)
+        for key, value in (
+            ("artistName", artist_name),
+            ("venueName", venue_name),
+            ("cityName", city_name),
+            ("tourName", tour_name),
+            ("state", state),
+        ):
+            if value and value.strip():
+                params[key] = value.strip()
+        if country_code and country_code.strip():
+            params["countryCode"] = country_code.strip().upper()
+
+        results: List[MatchedConcert] = []
+        seen_ids = set()
+        for page in range(1, max_pages + 1):
+            data = self._fetch_setlists_raw({**params, "p": str(page)})
+            raw_setlists = data.get("setlist", []) if data else []
+            if not raw_setlists:
+                break
+            for raw_setlist in raw_setlists:
+                event_id = raw_setlist.get("id")
+                if event_id and event_id in seen_ids:
+                    continue
+                if event_id:
+                    seen_ids.add(event_id)
+                results.append(self.parse_setlist_payload(raw_setlist, event_date or ""))
+                if len(results) >= max_results:
+                    return results
+            if len(raw_setlists) < 20:
+                break
+        return results
 
     def _fetch_setlists_raw(self, params: Dict[str, str]) -> Optional[Dict[str, Any]]:
         """Execute HTTP request against Setlist.fm search endpoint."""
@@ -369,6 +431,22 @@ class SetlistFmClient:
         elif headliner and headliner not in lineup_artists:
             lineup_artists.insert(0, headliner)
 
+        raw_setlist_data = dict(item)
+        if all_setlists and len(all_setlists) > 1:
+            raw_setlist_data["_stagesync_lineup_setlists"] = [
+                {
+                    "artist": entry.get("artist", {}).get("name"),
+                    "songs": [
+                        song.get("name")
+                        for set_group in entry.get("sets", {}).get("set", [])
+                        for song in set_group.get("song", [])
+                        if song.get("name")
+                    ],
+                }
+                for entry in all_setlists
+                if entry.get("artist", {}).get("name")
+            ]
+
         return MatchedConcert(
             setlist_fm_event_id=event_id,
             headliner_artist=headliner,
@@ -383,6 +461,6 @@ class SetlistFmClient:
             latitude=float(lat) if lat is not None else None,
             longitude=float(lon) if lon is not None else None,
             setlist_songs=setlist_songs,
-            raw_setlist_data=item,
+            raw_setlist_data=raw_setlist_data,
             source_url=source_url,
         )

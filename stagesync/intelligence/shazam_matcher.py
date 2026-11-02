@@ -56,6 +56,7 @@ class ShazamMatcher:
                 error="Shazamio package is not installed in the runtime environment.",
             )
 
+        shazam = None
         try:
             from shazamio import Shazam
 
@@ -73,6 +74,13 @@ class ShazamMatcher:
                 error=str(e),
                 raw_payload={"error": str(e)},
             )
+        finally:
+            close_fn = getattr(shazam, "close", None)
+            if close_fn is not None:
+                try:
+                    await close_fn()
+                except Exception as close_error:
+                    logger.debug("Shazam client cleanup failed: %s", close_error)
 
     def recognize(self, audio_path: Union[str, Path]) -> AcousticMatchResult:
         """Synchronous wrapper for acoustic recognition."""

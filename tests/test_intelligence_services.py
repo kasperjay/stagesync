@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
+import requests
+
 from stagesync.config import Settings
 from stagesync.database.connection import Database
 from stagesync.database.models import Concert, Identification, Video, VideoStatus
@@ -121,6 +123,91 @@ class TestIntelligenceServices(unittest.TestCase):
         self.assertTrue(res.matched)
         self.assertEqual(res.song_title, "Dragon")
         self.assertEqual(res.confidence, 0.92)
+
+    @patch("stagesync.intelligence.ai_audio_judge.requests.post")
+    def test_lyrics_discography_match_is_limited_to_discography(self, mock_post: MagicMock) -> None:
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"song_title":"Dragon","confidence":0.84,"reasoning":"Distinct lyric phrase"}'}]}}]
+        }
+        mock_post.return_value = mock_resp
+
+        judge = AIAudioJudge(api_key="valid_gemini_key")
+        result = judge.match_lyrics_to_discography(
+            lyrics="I am the dragon",
+            artist_name="King Gizzard",
+            discography=["Dragon", "Gila Monster"],
+        )
+
+        self.assertTrue(result.matched)
+        self.assertEqual(result.song_title, "Dragon")
+        self.assertEqual(result.service, "lyrics_discography")
+
+    @patch("stagesync.intelligence.musicbrainz.requests.get")
+    def test_musicbrainz_discography_deduplicates_recordings(self, mock_get: MagicMock) -> None:
+        artist_response = MagicMock()
+        artist_response.raise_for_status.return_value = None
+        artist_response.json.return_value = {"artists": [{"id": "artist-1"}]}
+        recording_response = MagicMock()
+        recording_response.raise_for_status.return_value = None
+        recording_response.json.return_value = {
+            "recordings": [{"id": "r1", "title": "Dragon"}, {"id": "r2", "title": "dragon"}, {"id": "r3", "title": "Gila Monster"}]
+        }
+        mock_get.side_effect = [artist_response, recording_response]
+
+        results = MusicBrainzClient().get_discography("King Gizzard")
+
+        self.assertEqual([item["title"] for item in results], ["Dragon", "Gila Monster"])
+
+    @patch("stagesync.intelligence.ai_audio_judge.time.sleep")
+    @patch("stagesync.intelligence.ai_audio_judge.requests.post")
+    def test_ai_audio_judge_retries_transient_503(self, mock_post: MagicMock, mock_sleep: MagicMock) -> None:
+        audio = self.base_path / "retry_clip.mp3"
+        audio.write_bytes(b"audio binary data")
+
+        unavailable = MagicMock()
+        unavailable.status_code = 503
+        unavailable.headers = {}
+        recovered = MagicMock()
+        recovered.status_code = 200
+        recovered.raise_for_status.return_value = None
+        recovered.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"song_title":"Dragon","confidence":0.9}' }]}}]
+        }
+        mock_post.side_effect = [unavailable, recovered]
+
+        judge = AIAudioJudge(api_key="secret-key")
+        result = judge.evaluate_live_clip(audio, ["Dragon"], "King Gizzard")
+
+        self.assertTrue(result.matched)
+        self.assertEqual(mock_post.call_count, 2)
+        mock_sleep.assert_called_once()
+
+    @patch("stagesync.intelligence.ai_audio_judge.time.sleep")
+    @patch("stagesync.intelligence.ai_audio_judge.requests.post")
+    def test_ai_audio_judge_exhausted_503_does_not_expose_api_key(
+        self, mock_post: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        audio = self.base_path / "failed_retry_clip.mp3"
+        audio.write_bytes(b"audio binary data")
+
+        unavailable = MagicMock()
+        unavailable.status_code = 503
+        unavailable.headers = {}
+        unavailable.raise_for_status.side_effect = requests.HTTPError(
+            "503 Server Error: https://example.test?key=secret-key",
+            response=unavailable,
+        )
+        mock_post.return_value = unavailable
+
+        judge = AIAudioJudge(api_key="secret-key")
+        result = judge.evaluate_live_clip(audio, ["Dragon"], "King Gizzard")
+
+        self.assertFalse(result.matched)
+        self.assertIn("HTTP 503", result.error or "")
+        self.assertNotIn("secret-key", result.error or "")
+        self.assertEqual(mock_post.call_count, 4)
 
     # -------------------------------------------------------------------------
     # ShazamMatcher Tests
@@ -366,6 +453,57 @@ class TestIntelligenceServices(unittest.TestCase):
         self.assertFalse(err_res["success"])
         self.assertEqual(err_res["outcome"], "error")
         self.assertIn("missing from local storage", err_res["error"] or "")
+
+    def test_pipeline_match_video_song_provider_outage_is_retryable_no_match(self) -> None:
+        settings = Settings(
+            database_url=f"sqlite:///{self.db_path}",
+            cache_dir=self.base_path / "cache",
+            gemini_api_key="test_gemini_key",
+            setlist_fm_api_key="",
+        )
+        coord = PipelineCoordinator(db=self.db, settings=settings)
+        clip_path = self.base_path / "provider_outage_clip.mp4"
+        clip_path.write_bytes(b"fakevideo")
+        fake_window = self.base_path / "provider_outage_window.mp3"
+        fake_window.write_bytes(b"fakeaudio")
+        video = Video(
+            id="vid_provider_outage",
+            source_photo_id="sp_provider_outage",
+            filename="provider-outage.MOV",
+            file_path=str(clip_path),
+            duration_seconds=42.0,
+            processing_status=VideoStatus.PENDING_REVIEW,
+        )
+        self.db.save_video(video)
+        ident = Identification(
+            id="ident_provider_outage",
+            video_id=video.id,
+            detected_artist="Gideon",
+            detected_song_title="Live Performance",
+            match_confidence=0.35,
+        )
+        self.db.save_identification(ident)
+
+        with patch.object(coord.audio_extractor, "extract_clips", return_value=[fake_window]), patch.object(
+            coord.shazam_matcher,
+            "recognize_many",
+            return_value=[AcousticMatchResult(matched=False, confidence=0.0, error="Shazam upstream 503")],
+        ), patch.object(
+            coord.ai_audio_judge,
+            "evaluate_live_clip",
+            return_value=AIAudioJudgeResult(
+                matched=False,
+                confidence=0.0,
+                error="Gemini API returned HTTP 429 after retries.",
+            ),
+        ):
+            result = coord.match_video_song(video.id)
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result["matched"])
+        self.assertEqual(result["outcome"], "no_match")
+        self.assertIn("temporarily unavailable", result["message"])
+        self.assertEqual(result["diagnostics"]["gemini_status"], "error")
 
 
 if __name__ == "__main__":

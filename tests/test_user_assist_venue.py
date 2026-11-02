@@ -188,14 +188,125 @@ class TestReidentifyVideoWithVenue(unittest.TestCase):
         self.assertEqual(up_concert.event_date, "2023-10-13")
 
         self.assertIsNotNone(up_ident)
-        self.assertEqual(up_ident.detected_artist, "Attila")
+        self.assertEqual(up_ident.detected_artist, "Live Artist")
         self.assertTrue(up_ident.setlist_verified)
 
         # Verify DB persisted
         db_vid = self.db.get_video(video.id)
         self.assertEqual(db_vid.latitude, 30.2408)
         db_ident = self.db.get_identification_by_video_id(video.id)
-        self.assertEqual(db_ident.detected_artist, "Attila")
+        self.assertEqual(db_ident.detected_artist, "Live Artist")
+
+    def test_reidentify_video_keeps_single_artist_show_automatic(self):
+        video = self.db.save_video(
+            Video(
+                source_photo_id="sp_single_artist",
+                filename="single.mov",
+                recorded_at_local="2023-10-13T20:45:35",
+                processing_status=VideoStatus.PENDING_REVIEW,
+            )
+        )
+        self.coord.setlist_client.search_by_venue_and_date = MagicMock(
+            return_value=MatchedConcert(
+                setlist_fm_event_id="single-event",
+                headliner_artist="Attila",
+                lineup_artists=["Attila"],
+                event_date="2023-10-13",
+                venue_name="Come and Take It Live",
+                city="Austin",
+                country_code="US",
+            )
+        )
+
+        _, _, ident = self.coord.reidentify_video_with_venue(
+            video_id=video.id,
+            venue_name="Come and Take It Live",
+            city="Austin",
+            latitude=30.2408,
+            longitude=-97.7288,
+        )
+
+        self.assertEqual(ident.detected_artist, "Attila")
+
+    def test_reidentify_renamed_venue_does_not_reuse_old_setlist_name(self):
+        video = self.db.save_video(
+            Video(
+                source_photo_id="sp_renamed_venue",
+                filename="renamed-venue.mov",
+                recorded_at_local="2020-10-13T20:45:35",
+                processing_status=VideoStatus.PENDING_REVIEW,
+            )
+        )
+        old_venue = self.db.save_venue(
+            Venue(
+                name="Backstage Live",
+                city="San Antonio",
+                state_province="TX",
+                country_code="US",
+                latitude=29.4253,
+                longitude=-98.4767,
+                setlist_fm_venue_id="1bd659d4",
+            )
+        )
+        self.coord.setlist_client.search_by_venue_and_date = MagicMock(return_value=None)
+        self.coord.setlist_client.search_by_city_and_date = MagicMock(return_value=None)
+
+        _, concert, _ = self.coord.reidentify_video_with_venue(
+            video_id=video.id,
+            venue_name="Alamo City Music Hall",
+            city="San Antonio",
+            state_province="TX",
+            latitude=29.4253,
+            longitude=-98.4767,
+            setlist_fm_venue_id="1bd659d4",
+        )
+
+        self.assertIsNotNone(concert)
+        self.assertEqual(self.db.get_venue(concert.venue_id).name, "Alamo City Music Hall")
+        self.assertEqual(self.db.get_venue(old_venue.id).name, "Backstage Live")
+
+    def test_reidentify_video_links_selected_venue_when_setlist_lookup_misses(self):
+        video = self.db.save_video(
+            Video(
+                source_photo_id="sp_existing_concert",
+                filename="existing-concert.mov",
+                recorded_at_local="2023-10-13T20:45:35",
+                processing_status=VideoStatus.PENDING_REVIEW,
+            )
+        )
+        concert = self.db.save_concert(
+            Concert(
+                headliner_artist="Attila",
+                event_date="2023-10-13",
+            )
+        )
+        self.db.save_identification(
+            Identification(
+                video_id=video.id,
+                concert_id=concert.id,
+                detected_song_title="Live Performance",
+                detected_artist="Attila",
+                match_confidence=0.70,
+            )
+        )
+        self.coord.setlist_client.search_by_venue_and_date = MagicMock(return_value=None)
+        self.coord.setlist_client.search_by_city_and_date = MagicMock(return_value=None)
+
+        _, linked_concert, _ = self.coord.reidentify_video_with_venue(
+            video_id=video.id,
+            venue_name="Come and Take It Live",
+            city="Austin",
+            latitude=30.2408,
+            longitude=-97.7288,
+        )
+
+        self.assertIsNotNone(linked_concert)
+        self.assertIsNotNone(linked_concert.venue_id)
+        self.assertEqual(self.db.get_concert(concert.id).venue_id, linked_concert.venue_id)
+        self.assertEqual(
+            self.db.get_venue(linked_concert.venue_id).name,
+            "Come and Take It Live",
+        )
 
 
 if __name__ == "__main__":

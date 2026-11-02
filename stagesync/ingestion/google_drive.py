@@ -402,7 +402,7 @@ class GoogleDriveClient:
         page_size: int = 50,
         page_token: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-        """Search Google Drive for video files matching date range and optional folder."""
+        """Search Google Drive for video files in an optional folder."""
         access_token = self.get_access_token()
         headers = {
             "Authorization": f"Bearer {access_token}",
@@ -424,25 +424,6 @@ class GoogleDriveClient:
             else:
                 parent_clauses = " or ".join(f"'{fid}' in parents" for fid in target_folders[:30])
                 query_parts.append(f"({parent_clauses})")
-
-        parsed_start = _parse_date(start_date)
-        parsed_end = _parse_date(end_date)
-
-        if not parsed_start and days:
-            now_date = datetime.datetime.now(datetime.timezone.utc).date()
-            parsed_start = now_date - datetime.timedelta(days=days)
-            if not parsed_end:
-                parsed_end = now_date
-        elif parsed_start and not parsed_end:
-            parsed_end = datetime.datetime.now(datetime.timezone.utc).date()
-
-        if parsed_start and parsed_end:
-            if parsed_start > parsed_end:
-                parsed_start, parsed_end = parsed_end, parsed_start
-            start_iso = f"{parsed_start.isoformat()}T00:00:00Z"
-            end_iso = f"{parsed_end.isoformat()}T23:59:59Z"
-            query_parts.append(f"createdTime >= '{start_iso}'")
-            query_parts.append(f"createdTime <= '{end_iso}'")
 
         full_query = " and ".join(query_parts)
         logger.info("Executing Google Drive search query: %s", full_query)

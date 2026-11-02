@@ -1,13 +1,14 @@
 """Unit tests for Google Drive video discovery, querying, downloading, and pipeline ingestion."""
 
 import datetime
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
 from stagesync.database.connection import Database
-from stagesync.database.models import VideoStatus
+from stagesync.database.models import Video, VideoStatus
 from stagesync.ingestion.google_drive import GoogleDriveClient, _parse_date, is_likely_video_file
 from stagesync.pipeline import PipelineCoordinator
 
@@ -75,8 +76,8 @@ class TestGoogleDrive(unittest.TestCase):
         self.assertIn("mimeType contains 'video/'", query)
         self.assertIn("'folder_abc' in parents", query)
         self.assertIn("trashed = false", query)
-        self.assertIn("createdTime >= '2024-08-01T00:00:00Z'", query)
-        self.assertIn("createdTime <= '2024-08-31T23:59:59Z'", query)
+        self.assertNotIn("createdTime >=", query)
+        self.assertNotIn("createdTime <=", query)
 
         # Global scan without folder_id targets video MIME types
         self.client.list_videos()
@@ -105,6 +106,7 @@ class TestGoogleDrive(unittest.TestCase):
         """Verify PipelineCoordinator.scan_google_drive catalogs discoveries properly."""
         coordinator = PipelineCoordinator(db=self.db)
         coordinator.drive_client = MagicMock()
+        coordinator.metadata_parser = MagicMock()
         coordinator.drive_client.list_videos.return_value = (
             [
                 {
@@ -141,6 +143,160 @@ class TestGoogleDrive(unittest.TestCase):
         db_v = self.db.get_video_by_source_id("drive_drv_999")
         self.assertIsNotNone(db_v)
         self.assertEqual(db_v.id, v.id)
+
+    def test_pipeline_skips_drive_content_duplicate(self) -> None:
+        """Verify a second Drive file with identical bytes is not cataloged twice."""
+        coordinator = PipelineCoordinator(db=self.db)
+        coordinator.drive_client = MagicMock()
+        coordinator.metadata_parser = MagicMock()
+        coordinator.metadata_parser.probe_file.side_effect = RuntimeError("test probe skipped")
+        existing_path = Path(self.temp_dir.name) / "existing.mp4"
+        existing_path.write_bytes(b"same-video-content")
+        existing = self.db.save_video(
+            Video(
+                source_photo_id="drive_original",
+                filename="original.mp4",
+                file_path=str(existing_path),
+                file_hash_sha256=hashlib.sha256(b"same-video-content").hexdigest(),
+                processing_status=VideoStatus.DOWNLOADED,
+            )
+        )
+        coordinator.drive_client.list_videos.return_value = (
+            [{"id": "drive_duplicate", "name": "copy.mp4", "mimeType": "video/mp4", "size": "18", "videoMediaMetadata": {"durationMillis": "90000"}}],
+            None,
+        )
+
+        def download(_file_id, target):
+            target.write_bytes(b"same-video-content")
+            return target, existing.file_hash_sha256
+
+        coordinator.drive_client.download_video.side_effect = download
+        videos = coordinator.scan_google_drive(dry_run=False)
+
+        self.assertEqual(videos, [])
+        self.assertEqual(len(self.db.list_videos()), 1)
+        self.assertFalse((coordinator.download_dir / f"{existing.id}_copy.mp4").exists())
+
+    def test_pipeline_continues_after_empty_filtered_drive_page(self) -> None:
+        """Verify an API page with no video candidates does not stop discovery."""
+        coordinator = PipelineCoordinator(db=self.db)
+        coordinator.drive_client = MagicMock()
+        coordinator.drive_client.list_videos.side_effect = [
+            ([], "next-page"),
+            (
+                [
+                    {
+                        "id": "drv_later",
+                        "name": "Later_Concert.MOV",
+                        "mimeType": "video/quicktime",
+                        "size": "5000000",
+                        "createdTime": "2024-08-15T22:00:00Z",
+                        "videoMediaMetadata": {"durationMillis": "95000"},
+                    }
+                ],
+                None,
+            ),
+        ]
+
+        videos = coordinator.scan_google_drive(dry_run=True, limit=50)
+
+        self.assertEqual([video.filename for video in videos], ["Later_Concert.MOV"])
+        self.assertEqual(coordinator.drive_client.list_videos.call_count, 2)
+
+    def test_folder_scan_paginates_past_default_limit(self) -> None:
+        """Verify folder scans continue through every Drive page instead of stopping at 50."""
+        coordinator = PipelineCoordinator(db=self.db)
+        coordinator.drive_client = MagicMock()
+        first_page = [
+            {
+                "id": f"drv_{index}",
+                "name": f"Concert_{index}.MOV",
+                "mimeType": "video/quicktime",
+                "size": "5000000",
+                "videoMediaMetadata": {"durationMillis": "95000"},
+            }
+            for index in range(50)
+        ]
+        second_page = [
+            {
+                "id": "drv_50",
+                "name": "Concert_50.MOV",
+                "mimeType": "video/quicktime",
+                "size": "5000000",
+                "videoMediaMetadata": {"durationMillis": "95000"},
+            }
+        ]
+        coordinator.drive_client.list_videos.side_effect = [
+            (first_page, "next-page"),
+            (second_page, None),
+        ]
+
+        videos = coordinator.scan_google_drive(folder_id="folder_abc", dry_run=True)
+
+        self.assertEqual(len(videos), 51)
+        self.assertEqual(coordinator.drive_client.list_videos.call_count, 2)
+
+    def test_pipeline_filters_drive_dates_by_embedded_recording_time(self) -> None:
+        """Verify Drive date filters use recording metadata instead of upload time."""
+        coordinator = PipelineCoordinator(db=self.db)
+        coordinator.drive_client = MagicMock()
+        coordinator.metadata_parser = MagicMock()
+        coordinator.drive_client.list_videos.return_value = (
+            [
+                {
+                    "id": "drv_in_range",
+                    "name": "In_Range.MOV",
+                    "mimeType": "video/quicktime",
+                    "size": "5000000",
+                    "createdTime": "2026-10-27T22:00:00Z",
+                    "videoMediaMetadata": {"durationMillis": "95000"},
+                },
+                {
+                    "id": "drv_out_of_range",
+                    "name": "Out_Of_Range.MOV",
+                    "mimeType": "video/quicktime",
+                    "size": "5000000",
+                    "createdTime": "2026-10-27T22:01:00Z",
+                    "videoMediaMetadata": {"durationMillis": "95000"},
+                },
+            ],
+            None,
+        )
+
+        def download(file_id: str, target_file: Path):
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            target_file.write_bytes(b"video")
+            return target_file, "hash"
+
+        coordinator.drive_client.download_video.side_effect = download
+        coordinator.metadata_parser.probe_file.side_effect = [
+            MagicMock(
+                recorded_at_utc="2023-10-13T20:45:35+00:00",
+                recorded_at_local=None,
+                duration_seconds=95.0,
+                width=None,
+                height=None,
+                latitude=None,
+                longitude=None,
+            ),
+            MagicMock(
+                recorded_at_utc="2025-10-13T20:45:35+00:00",
+                recorded_at_local=None,
+                duration_seconds=95.0,
+                width=None,
+                height=None,
+                latitude=None,
+                longitude=None,
+            ),
+        ]
+
+        videos = coordinator.scan_google_drive(
+            start_date="2023-01-01",
+            end_date="2024-01-01",
+            dry_run=False,
+        )
+
+        self.assertEqual([video.filename for video in videos], ["In_Range.MOV"])
 
     def test_is_likely_video_file_filter(self) -> None:
         """Verify is_likely_video_file rejects code, presets, and small false-positives."""

@@ -119,6 +119,28 @@ class TestMetadataGen(unittest.TestCase):
         total_len = sum(len(t) for t in tags) + len(tags)
         self.assertLessEqual(total_len, 500)
 
+    def test_resolve_artist_from_song_on_multi_artist_bill(self) -> None:
+        concert = Concert(
+            headliner_artist="Various Artists",
+            lineup_artists=["Artist A", "Artist B"],
+            event_date="2024-08-15",
+            setlist_data={
+                "artist": {"name": "Artist A"},
+                "_stagesync_lineup_setlists": [
+                    {"artist": "Artist A", "songs": ["Song A"]},
+                    {"artist": "Artist B", "songs": ["Song B"]},
+                ],
+            },
+        )
+        ident = Identification(
+            video_id="video_1",
+            detected_song_title="Song B",
+            detected_artist="Various Artists",
+            match_confidence=0.95,
+        )
+
+        self.assertEqual(self.gen.resolve_artist(ident, concert), "Artist B")
+
 
 if __name__ == "__main__":
     unittest.main()

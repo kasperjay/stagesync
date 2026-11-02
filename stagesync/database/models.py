@@ -50,6 +50,7 @@ class FingerprintService(str, Enum):
     AUDD = "audd"
     ACRCLOUD = "acrcloud"
     MANUAL = "manual"
+    LYRICS_DISCOGRAPHY = "lyrics_discography"
 
 
 class PipelineStep(str, Enum):

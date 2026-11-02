@@ -22,6 +22,7 @@ from stagesync.ingestion.metadata_parser import MetadataParser
 from stagesync.intelligence.geocoder import ReverseGeocoder
 from stagesync.intelligence.setlist_fm import SetlistFmClient
 from stagesync.publisher.metadata_gen import MetadataGenerator
+from stagesync.pipeline import PipelineCoordinator
 from tests.conftest import (
     SAMPLE_NOMINATIM_PAYLOAD,
     SAMPLE_RED_ROCKS_PROBE_JSON,
@@ -203,6 +204,36 @@ class TestPipelineIntegration(unittest.TestCase):
         published_upload = self.db.get_youtube_upload_by_video_id(saved_video.id)
         self.assertEqual(published_upload.youtube_video_id, "dQw4w9WgXcQ")
         self.assertEqual(published_upload.upload_status, "COMPLETED")
+
+    def test_lyrics_suggestion_requires_confirmation_before_metadata(self) -> None:
+        video = Video(
+            source_photo_id="lyrics-suggestion-video",
+            filename="suggestion.mp4",
+            file_size_bytes=123,
+            processing_status=VideoStatus.PENDING_REVIEW,
+        )
+        self.db.save_video(video)
+        ident = Identification(
+            video_id=video.id,
+            detected_song_title="Dragon",
+            detected_artist="King Gizzard & The Lizard Wizard",
+            match_confidence=0.78,
+            fingerprint_service="lyrics_discography",
+            identified_lyrics_snippet="I am the dragon",
+            status="SUGGESTED",
+        )
+        self.db.save_identification(ident)
+        coordinator = PipelineCoordinator(db=self.db)
+
+        with self.assertRaisesRegex(ValueError, "lyrics-based suggestion"):
+            coordinator.approve_video(video.id)
+        self.assertIsNone(self.db.get_youtube_upload_by_video_id(video.id))
+
+        confirmed = coordinator.confirm_suggested_match(video.id)
+        self.assertEqual(confirmed.processing_status, VideoStatus.APPROVED)
+        confirmed_ident = self.db.get_identification_by_video_id(video.id)
+        self.assertEqual(confirmed_ident.status, "CONFIRMED")
+        self.assertIsNotNone(self.db.get_youtube_upload_by_video_id(video.id))
 
 
 if __name__ == "__main__":

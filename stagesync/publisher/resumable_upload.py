@@ -6,11 +6,13 @@ network retry exponential backoff, progress tracking, and daily quota preservati
 
 from __future__ import annotations
 
+import datetime
 import logging
 import os
 from pathlib import Path
 import time
 from typing import Any, Callable, Dict, Optional, Union
+from dateutil import parser as dt_parser
 from pydantic import BaseModel
 import requests
 
@@ -97,8 +99,9 @@ class ResumableUploader:
         }
 
         recording_details: Dict[str, Any] = {}
-        if metadata.recording_date:
-            recording_details["recordingDate"] = metadata.recording_date
+        normalized_date = self._normalize_recording_date(metadata.recording_date)
+        if normalized_date:
+            recording_details["recordingDate"] = normalized_date
         if metadata.latitude is not None and metadata.longitude is not None:
             recording_details["location"] = {
                 "latitude": metadata.latitude,
@@ -113,12 +116,41 @@ class ResumableUploader:
             json=body,
             timeout=20,
         )
-        res.raise_for_status()
+        try:
+            res.raise_for_status()
+        except requests.HTTPError as http_err:
+            detail = ""
+            try:
+                err_payload = res.json()
+                detail = err_payload.get("error", {}).get("message", "")
+            except Exception:
+                detail = (res.text or "").strip()[:300]
+            if detail:
+                raise RuntimeError(f"YouTube API error ({res.status_code}): {detail}") from http_err
+            raise
 
         upload_url = res.headers.get("Location")
         if not upload_url:
             raise RuntimeError("YouTube API did not return a resumable Location header.")
         return upload_url
+
+    @staticmethod
+    def _normalize_recording_date(raw_date: Optional[str]) -> Optional[str]:
+        """Format recording timestamp as RFC 3339 UTC ending in Z for YouTube Data API."""
+        if not raw_date or not raw_date.strip():
+            return None
+        cleaned = raw_date.strip()
+        if cleaned.endswith("Z"):
+            return cleaned
+        try:
+            parsed = dt_parser.isoparse(cleaned)
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(datetime.timezone.utc)
+            else:
+                parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+            return parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            return None
 
     def upload_file(
         self,
@@ -142,6 +174,7 @@ class ResumableUploader:
 
         file_size = path.stat().st_size
         mime_type = "video/quicktime" if path.suffix.lower() == ".mov" else "video/mp4"
+        upload_record = self.db.get_youtube_upload_by_video_id(video_id)
 
         # Acquire or reuse upload URI
         upload_uri = existing_resumable_uri
@@ -155,10 +188,13 @@ class ResumableUploader:
                 )
             except Exception as e:
                 logger.error("Failed to initiate YouTube resumable session: %s", e)
+                if upload_record:
+                    upload_record.upload_status = "FAILED"
+                    upload_record.error_message = str(e)
+                    self.db.save_youtube_upload(upload_record)
                 return UploadResult(success=False, error_message=str(e), total_bytes=file_size)
 
         # Update database with resumable URI
-        upload_record = self.db.get_youtube_upload_by_video_id(video_id)
         if upload_record:
             upload_record.upload_resumable_uri = upload_uri
             upload_record.upload_status = "UPLOADING"

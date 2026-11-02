@@ -41,6 +41,50 @@ class MetadataGenerator:
     MAX_TITLE_LENGTH = 100
     MAX_TAGS_LENGTH = 500
 
+    @staticmethod
+    def _usable_artist(value: Optional[str]) -> str:
+        artist = (value or "").strip()
+        if artist.casefold() in {"", "various artists", "unknown artist", "unknown", "live artist"}:
+            return ""
+        return artist
+
+    @staticmethod
+    def _normalized_title(value: Optional[str]) -> str:
+        return "".join(char.casefold() for char in (value or "") if char.isalnum())
+
+    def resolve_artist(
+        self,
+        identification: Optional[Identification],
+        concert: Optional[Concert],
+    ) -> str:
+        """Resolve the artist without allowing a multi-artist placeholder to win."""
+        song_title = identification.detected_song_title if identification else None
+        if concert and song_title:
+            lineup_setlists = concert.setlist_data.get("_stagesync_lineup_setlists", [])
+            normalized_song = self._normalized_title(song_title)
+            for entry in lineup_setlists:
+                songs = entry.get("songs", [])
+                if any(
+                    normalized_song == self._normalized_title(song)
+                    or normalized_song in self._normalized_title(song)
+                    or self._normalized_title(song) in normalized_song
+                    for song in songs
+                ):
+                    artist = self._usable_artist(entry.get("artist"))
+                    if artist:
+                        return artist
+
+        artist = self._usable_artist(identification.detected_artist if identification else None)
+        if artist:
+            return artist
+        if concert and len({artist.casefold() for artist in concert.lineup_artists if artist.strip()}) > 1:
+            return "Various Artists"
+        artist = self._usable_artist(concert.headliner_artist if concert else None)
+        if artist:
+            return artist
+        raw_artist = concert.setlist_data.get("artist", {}).get("name") if concert else None
+        return self._usable_artist(raw_artist) or "Various Artists"
+
     def format_title(
         self,
         artist: str,
@@ -137,10 +181,9 @@ class MetadataGenerator:
         song_title = "Live Performance"
         if identification and identification.detected_song_title:
             song_title = identification.detected_song_title
-        if identification and identification.detected_artist:
-            artist = identification.detected_artist
-        elif concert and concert.headliner_artist:
-            artist = concert.headliner_artist
+        resolved_artist = self.resolve_artist(identification, concert)
+        if resolved_artist:
+            artist = resolved_artist
 
         lines = [f'Live performance of "{song_title}" by {artist}.', ""]
 
@@ -284,14 +327,11 @@ class MetadataGenerator:
         clip_index: int = 1,
     ) -> FormattedYouTubeMetadata:
         """Create complete formatted YouTube metadata for a video entity."""
-        artist = ""
+        artist = self.resolve_artist(identification, concert)
         song_title = None
 
         if identification:
-            artist = identification.detected_artist
             song_title = identification.detected_song_title
-        if not artist and concert:
-            artist = concert.headliner_artist
         if not artist:
             artist = "Live Concert"
 

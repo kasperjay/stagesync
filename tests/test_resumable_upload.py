@@ -155,6 +155,22 @@ class TestResumableUpload(unittest.TestCase):
         self.assertEqual(res.youtube_url, "https://youtu.be/yt_video_9999")
         self.assertEqual(res.bytes_uploaded, 1000)
 
+    @patch("requests.post")
+    def test_initiate_resumable_session_normalizes_iso_offset_recording_date(self, mock_post: MagicMock) -> None:
+        mock_resp = MagicMock()
+        mock_resp.headers = {"Location": "https://upload.youtube.com/sess_tz"}
+        mock_resp.raise_for_status.return_value = None
+        mock_post.return_value = mock_resp
+
+        meta = FormattedYouTubeMetadata(
+            title="Gideon - Take Off (Live)",
+            description="Live in Austin",
+            recording_date="2023-10-14T01:57:43+00:00",
+        )
+        self.uploader.initiate_resumable_session(metadata=meta, file_size=4096)
+        body = mock_post.call_args[1]["json"]
+        self.assertEqual(body["recordingDetails"]["recordingDate"], "2023-10-14T01:57:43Z")
+
 
 if __name__ == "__main__":
     unittest.main()

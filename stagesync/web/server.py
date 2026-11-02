@@ -10,10 +10,13 @@ Powered by aiohttp.web with zero node/npm build dependencies.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 import json
 import logging
 import mimetypes
 from pathlib import Path
+import threading
+import uuid
 from typing import Any, Dict, Optional
 import webbrowser
 
@@ -23,6 +26,7 @@ from stagesync.config import Settings, get_settings
 from stagesync.database.connection import Database, get_db
 from stagesync.database.models import PrivacyStatus, VideoStatus
 from stagesync.intelligence.thumbnail_extractor import ThumbnailExtractor
+from stagesync.intelligence.setlist_fm import MatchedConcert
 from stagesync.pipeline import PipelineCoordinator
 
 logger = logging.getLogger(__name__)
@@ -30,6 +34,101 @@ logger = logging.getLogger(__name__)
 SETTINGS_KEY = web.AppKey("settings", Settings)
 DB_KEY = web.AppKey("db", Database)
 COORD_KEY = web.AppKey("coordinator", PipelineCoordinator)
+
+
+@dataclass
+class ScanJob:
+    """Track progress and result state for one background discovery scan."""
+
+    scan_id: str
+    mode: str
+    status: str = "running"
+    current: int = 0
+    total: int = 0
+    message: str = "Starting scan..."
+    scanned_count: int = 0
+    error: Optional[str] = None
+    cancel_requested: bool = False
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def update(self, current: int, total: int, message: str) -> None:
+        with self._lock:
+            self.current = max(0, current)
+            self.total = max(0, total)
+            self.message = message
+
+    def finish(self, scanned_count: int) -> None:
+        with self._lock:
+            self.status = "completed"
+            self.scanned_count = scanned_count
+            self.message = f"Discovery complete — found {scanned_count} candidate(s)"
+
+    def fail(self, error: str) -> None:
+        with self._lock:
+            self.status = "failed"
+            self.error = error
+            self.message = "Discovery failed"
+
+    def request_cancel(self) -> bool:
+        with self._lock:
+            if self.status != "running":
+                return False
+            self.cancel_requested = True
+            self.status = "cancelling"
+            self.message = "Stopping scan..."
+            return True
+
+    def cancel(self) -> None:
+        with self._lock:
+            self.status = "cancelled"
+            self.message = "Scan cancelled"
+
+    def snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "scan_id": self.scan_id,
+                "mode": self.mode,
+                "status": self.status,
+                "current": self.current,
+                "total": self.total,
+                "message": self.message,
+                "scanned_count": self.scanned_count,
+                "error": self.error,
+                "cancel_requested": self.cancel_requested,
+            }
+
+
+class ScanState:
+    """Coordinate active discovery scans and retain recent job state."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.jobs: Dict[str, ScanJob] = {}
+        self.active_scan_id: Optional[str] = None
+
+    def start(self, mode: str) -> Optional[ScanJob]:
+        with self._lock:
+            if self.active_scan_id:
+                active = self.jobs.get(self.active_scan_id)
+                if active and active.status in {"running", "cancelling"}:
+                    return None
+            scan_id = uuid.uuid4().hex
+            job = ScanJob(scan_id=scan_id, mode=mode)
+            self.jobs[scan_id] = job
+            self.active_scan_id = scan_id
+            return job
+
+    def finish(self, scan_id: str) -> None:
+        with self._lock:
+            if self.active_scan_id == scan_id:
+                self.active_scan_id = None
+
+
+class ScanCancelled(Exception):
+    """Raised at a cooperative scan checkpoint after the user cancels."""
+
+
+SCAN_STATE_KEY = web.AppKey("scan_state", ScanState)
 
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -673,6 +772,9 @@ HTML_PAGE = """<!DOCTYPE html>
                 <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                 Change / Search Venue →
               </button>
+              <button type="button" onclick="openSetlistAssistModal(activeSelectedVideo ? activeSelectedVideo.id : '')" class="mt-1 text-[10px] font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1">
+                Search exact concert / tour on Setlist.fm →
+              </button>
             </div>
             <div class="bg-canvas p-2.5 rounded-xl border border-border">
               <span class="text-zinc-400 block text-[10px]">Event Date</span>
@@ -737,9 +839,9 @@ HTML_PAGE = """<!DOCTYPE html>
             <div>
               <label class="block text-zinc-400 mb-1 text-[11px] font-medium">Privacy Status</label>
               <select id="drawer-privacy-input" class="w-full bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:border-brand-500 text-xs">
-                <option value="PUBLIC">PUBLIC (Everyone can see and search)</option>
-                <option value="UNLISTED" selected>UNLISTED (Anyone with the link can view)</option>
-                <option value="PRIVATE">PRIVATE (Only authenticated creator can view)</option>
+                <option value="public">PUBLIC (Everyone can see and search)</option>
+                <option value="unlisted" selected>UNLISTED (Anyone with the link can view)</option>
+                <option value="private">PRIVATE (Only authenticated creator can view)</option>
               </select>
             </div>
           </div>
@@ -751,6 +853,9 @@ HTML_PAGE = """<!DOCTYPE html>
       <div class="p-4 border-t border-border bg-card-subtle flex items-center justify-end gap-2.5">
         <button onclick="handleDrawerReject()" id="drawer-btn-reject" class="px-4 py-2 text-xs font-semibold rounded-xl bg-card border border-border hover:bg-rose-950/40 hover:text-rose-300 hover:border-rose-800 text-zinc-300 transition">
           Reject Candidate
+        </button>
+        <button onclick="handleDrawerDelete()" id="drawer-btn-delete" class="hidden px-4 py-2 text-xs font-semibold rounded-xl bg-rose-950/40 border border-rose-800 text-rose-200 hover:bg-rose-900/60 transition">
+          Delete Permanently
         </button>
         <button onclick="handleDrawerApprove()" id="drawer-btn-approve" class="px-5 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition">
           Approve & Queue Upload
@@ -789,10 +894,20 @@ HTML_PAGE = """<!DOCTYPE html>
       <!-- Feedback / Error Notice -->
       <div id="scan-feedback-box" class="hidden text-xs"></div>
 
+      <div id="scan-progress-box" class="hidden bg-canvas border border-border rounded-xl p-3 space-y-2" aria-live="polite">
+        <div class="flex items-center justify-between gap-3 text-[11px]">
+          <span id="scan-progress-message" class="text-zinc-300">Starting scan...</span>
+          <span id="scan-progress-count" class="text-zinc-500 font-mono tabular">Preparing</span>
+        </div>
+        <div class="h-1.5 rounded-full bg-zinc-800 overflow-hidden" role="progressbar" aria-label="Scan progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div id="scan-progress-bar" class="h-full rounded-full bg-gradient-to-r from-brand-500 to-indigo-400 transition-all duration-300" style="width: 0%"></div>
+        </div>
+      </div>
+
       <!-- Mode: Google Drive -->
       <div id="scan-mode-drive" class="space-y-3 text-xs">
         <div class="bg-indigo-950/30 border border-indigo-900/40 rounded-xl p-3 text-[11px] text-indigo-200">
-          <span>⚡ Google Drive API supports full video search & date filtering without deprecation blocks.</span>
+          <span>⚡ Date filters use embedded recording time during a live scan; Drive upload time is not used.</span>
         </div>
         <div>
           <label class="block text-zinc-400 mb-1">Start Date</label>
@@ -858,12 +973,12 @@ HTML_PAGE = """<!DOCTYPE html>
         <div>
           <label class="block text-zinc-400 mb-1">Local Directory Path</label>
           <input type="text" id="scan-local-dir" placeholder="/home/workspace/concert_videos" class="w-full bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 font-mono">
-          <p class="text-[11px] text-zinc-400 mt-1">Scan any folder containing concert video files (.mp4, .mov, .m4v).</p>
+              <p class="text-[11px] text-zinc-400 mt-1">Scans all matching videos in the folder, including supported nested folders.</p>
         </div>
       </div>
 
       <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-border">
-        <button onclick="closeScanModal()" class="px-4 py-2 text-xs rounded-xl bg-card hover:bg-zinc-800 text-zinc-300 transition">Cancel</button>
+        <button onclick="cancelScan()" id="btn-cancel-scan" class="px-4 py-2 text-xs rounded-xl bg-card hover:bg-zinc-800 text-zinc-300 transition">Cancel</button>
         <button onclick="executeScan()" id="btn-run-scan" class="px-5 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition">Start Discovery</button>
       </div>
     </div>
@@ -941,6 +1056,37 @@ HTML_PAGE = """<!DOCTYPE html>
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
           Confirm & Re-Search Concert
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================================================================= -->
+  <!-- MANUAL SETLIST.FM CONCERT SEARCH MODAL                           -->
+  <!-- ================================================================= -->
+  <div id="setlist-assist-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-card border border-border rounded-2xl max-w-2xl w-full p-6 shadow-2xl relative space-y-4">
+      <div class="flex items-start justify-between border-b border-border pb-3">
+        <div>
+          <div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 mb-1.5">SETLIST.FM LOOKUP</div>
+          <h3 class="text-lg font-bold text-white tracking-tight">Find the exact concert</h3>
+          <p class="text-xs text-zinc-400 mt-0.5">Search by date, artist, venue, city, or tour, then attach the matching show to this clip.</p>
+        </div>
+        <button type="button" onclick="closeSetlistAssistModal()" class="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-zinc-800 transition" aria-label="Close concert search">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+      <div class="grid grid-cols-2 gap-2.5 text-xs">
+        <input id="setlist-search-date" type="date" class="bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+        <input id="setlist-search-artist" placeholder="Artist / band" class="bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 placeholder-zinc-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+        <input id="setlist-search-venue" placeholder="Venue" class="bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 placeholder-zinc-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+        <input id="setlist-search-city" placeholder="City" class="bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 placeholder-zinc-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+        <input id="setlist-search-tour" placeholder="Tour name (optional)" class="bg-canvas border border-border rounded-xl px-3 py-2 text-zinc-200 placeholder-zinc-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 col-span-2" />
+      </div>
+      <div class="flex justify-end">
+        <button type="button" id="btn-setlist-search" onclick="searchSetlistConcerts()" class="px-4 py-2 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white transition">Search Setlist.fm</button>
+      </div>
+      <div id="setlist-search-results" class="max-h-80 overflow-y-auto space-y-2 pr-1">
+        <div class="text-center py-6 text-zinc-400 text-xs">Enter at least one search field.</div>
       </div>
     </div>
   </div>
@@ -1185,7 +1331,7 @@ HTML_PAGE = """<!DOCTYPE html>
       const ident = v?.identification || {};
       const c = v?.concert || {};
       const artist = ident.detected_artist || c.headliner_artist || '';
-      return ['live artist', 'unknown artist', 'unknown'].includes(artist.trim().toLowerCase()) ? '' : artist;
+      return ['live artist', 'unknown artist', 'unknown', 'various artists'].includes(artist.trim().toLowerCase()) ? '' : artist;
     }
 
     function isVenueUnmatched(v) {
@@ -1408,6 +1554,7 @@ HTML_PAGE = """<!DOCTYPE html>
     let songAssistAutoPlayPending = false;
     let songAssistPendingSeekTime = null;
     let songAssistAudioReadyVideoId = null;
+    const suggestionPlaybackSeen = new Set();
 
     function setSongAssistBufferUI(state, pct = 0, customLabel = '') {
       const badge = document.getElementById('song-assist-buffer-badge');
@@ -1698,6 +1845,7 @@ HTML_PAGE = """<!DOCTYPE html>
     async function toggleSongAssistPlayback() {
       const audio = document.getElementById('song-assist-audio');
       if (!audio || !activeSongAssistVideoId) return;
+      suggestionPlaybackSeen.add(activeSongAssistVideoId);
       try {
         if (songAssistAudioReadyVideoId !== activeSongAssistVideoId || !audio.getAttribute('src')) {
           if (songAssistAutoPlayPending) {
@@ -2581,6 +2729,7 @@ HTML_PAGE = """<!DOCTYPE html>
         const needsBandAssist = isBandUnmatched(v);
         const songUnmatched = isSongUnmatched(v);
         const needsSongAssist = songUnmatched && Boolean(knownArtistForVideo(v));
+        const isSuggested = ident.status === 'SUGGESTED';
         const needsVenueAssist = !hasKnownVenue;
         const primaryAssist = needsBandAssist ? 'band' : needsSongAssist ? 'song' : needsVenueAssist ? 'venue' : 'drawer';
         const primaryAssistAction = primaryAssist === 'band'
@@ -2658,11 +2807,15 @@ HTML_PAGE = """<!DOCTYPE html>
                     Song?
                   </button>
                 ` : ''}
-                ${colKey === 'review' ? `
+                ${colKey === 'review' ? (isSuggested ? `
+                  <button type="button" onclick="event.stopPropagation(); confirmSuggestedMatch('${v.id}')" class="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-amber-600 hover:bg-amber-500 text-white transition">
+                    Confirm Match ✓
+                  </button>
+                ` : `
                   <button type="button" onclick="quickApprove('${v.id}')" class="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-brand-600 hover:bg-brand-500 text-white transition">
                     Approve ✓
                   </button>
-                ` : `
+                `) : `
                   <button type="button" onclick="openDrawer('${v.id}')" class="text-[10px] text-zinc-400 hover:text-white transition px-1">Inspect →</button>
                 `}
               </div>
@@ -2744,7 +2897,25 @@ HTML_PAGE = """<!DOCTYPE html>
         `;
       }
 
-      container.innerHTML = headerBanner + pending.map(v => {
+      const groupedByDate = pending.reduce((groups, video) => {
+        const concert = video.concert || {};
+        const date = concert.event_date || (video.recorded_at_local ? video.recorded_at_local.substring(0, 10) : (video.recorded_at_utc ? video.recorded_at_utc.substring(0, 10) : 'UNKNOWN'));
+        if (!groups[date]) groups[date] = [];
+        groups[date].push(video);
+        return groups;
+      }, {});
+      const reviewDates = Object.keys(groupedByDate).sort((a, b) => {
+        if (a === 'UNKNOWN') return 1;
+        if (b === 'UNKNOWN') return -1;
+        return b.localeCompare(a);
+      });
+      const formatReviewDate = date => {
+        if (date === 'UNKNOWN') return 'Date not available';
+        const parsed = new Date(`${date}T00:00:00Z`);
+        return Number.isNaN(parsed.getTime()) ? date : parsed.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+      };
+
+      const renderReviewCard = v => {
         const c = v.concert || {};
         const ident = v.identification || {};
         const conf = ident.match_confidence ? Math.round(ident.match_confidence * 100) : 0;
@@ -2755,6 +2926,7 @@ HTML_PAGE = """<!DOCTYPE html>
         const needsBandAssist = isBandUnmatched(v);
         const songUnmatched = isSongUnmatched(v);
         const showBands = needsBandAssist ? getShowBands(v) : [];
+        const isSuggested = ident.status === 'SUGGESTED';
 
         return `
           <div class="bg-card border border-border rounded-2xl p-5 hover:border-zinc-700 transition space-y-4 shadow-sm">
@@ -2805,7 +2977,9 @@ HTML_PAGE = """<!DOCTYPE html>
                     </button>
                   </div>
                   <div class="flex items-center gap-2">
-                    ${songUnmatched ? `
+                    ${isSuggested ? `
+                      <span class="text-xs px-2.5 py-1 rounded-lg bg-purple-500/10 text-purple-300 border border-purple-500/30 font-semibold">Lyrics suggestion</span>
+                    ` : songUnmatched ? `
                       <span class="text-xs px-2.5 py-1 rounded-lg bg-rose-500/10 text-rose-300 border border-rose-500/30 font-semibold">Song not identified</span>
                     ` : ''}
                     <span class="text-xs px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-semibold">
@@ -2904,14 +3078,35 @@ HTML_PAGE = """<!DOCTYPE html>
                 <button onclick="rejectVideo('${v.id}')" class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-card-subtle hover:bg-rose-950/40 hover:text-rose-300 hover:border-rose-800 border border-border transition">
                   Reject
                 </button>
-                <button onclick="quickApprove('${v.id}')" class="px-4 py-1.5 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition">
-                  Approve & Queue Upload
-                </button>
+                ${isSuggested ? `
+                  <button onclick="confirmSuggestedMatch('${v.id}')" class="px-4 py-1.5 text-xs font-semibold rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-md shadow-amber-500/20 transition">
+                    Review Playback & Confirm Match
+                  </button>
+                ` : `
+                  <button onclick="quickApprove('${v.id}')" class="px-4 py-1.5 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition">
+                    Approve & Queue Upload
+                  </button>
+                `}
               </div>
             </div>
           </div>
         `;
-      }).join('');
+      };
+
+      const dateSections = reviewDates.map(date => `
+        <section class="space-y-3">
+          <div class="flex items-center gap-3 pt-2">
+            <h2 class="text-sm font-bold text-zinc-100 whitespace-nowrap">${formatReviewDate(date)}</h2>
+            <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 border border-border tabular">${groupedByDate[date].length} video${groupedByDate[date].length === 1 ? '' : 's'}</span>
+            <div class="h-px bg-border flex-1"></div>
+          </div>
+          <div class="grid grid-cols-1 gap-4">
+            ${groupedByDate[date].map(renderReviewCard).join('')}
+          </div>
+        </section>
+      `).join('');
+
+      container.innerHTML = headerBanner + dateSections;
     }
 
     function renderCatalog() {
@@ -2996,6 +3191,20 @@ HTML_PAGE = """<!DOCTYPE html>
         'bg-amber-500/10 text-amber-400 border border-amber-500/30'
       }`;
 
+      const rejectButton = document.getElementById('drawer-btn-reject');
+      const deleteButton = document.getElementById('drawer-btn-delete');
+      const approveButton = document.getElementById('drawer-btn-approve');
+      const isPublished = v.processing_status === 'PUBLISHED';
+      const isRejected = v.processing_status === 'REJECTED';
+      const isSuggested = ident.status === 'SUGGESTED';
+      rejectButton?.classList.toggle('hidden', isRejected || isPublished);
+      deleteButton?.classList.toggle('hidden', !isRejected);
+      approveButton?.classList.toggle('hidden', isRejected || isPublished);
+      if (approveButton) {
+        approveButton.onclick = isSuggested ? () => confirmSuggestedMatch(v.id) : handleDrawerApprove;
+        approveButton.innerText = isSuggested ? 'Review Playback & Confirm Match' : 'Approve & Queue Upload';
+      }
+
       // AI Match
       const artist = ident.detected_artist || c.headliner_artist || 'Unknown Artist';
       const song = ident.detected_song_title || 'Live Performance';
@@ -3050,8 +3259,14 @@ HTML_PAGE = """<!DOCTYPE html>
       }
 
       // Pre-fill YouTube form
+      const upload = v.upload || {};
       const defaultTitle = `${artist} - ${song} (Live at ${venue.name || 'Concert'}, ${c.event_date ? c.event_date.substring(0, 4) : ''})`;
-      document.getElementById('drawer-title-input').value = defaultTitle;
+      document.getElementById('drawer-title-input').value = upload.title || defaultTitle;
+      const privacySelect = document.getElementById('drawer-privacy-input');
+      if (privacySelect) {
+        const savedPrivacy = String(upload.privacy_status || 'unlisted').toLowerCase();
+        privacySelect.value = ['public', 'unlisted', 'private'].includes(savedPrivacy) ? savedPrivacy : 'unlisted';
+      }
       renderDrawerMatchFeedback(v.id);
       if (isSongUnmatched(v)) {
         warmUnidentifiedAudioCache(v.id);
@@ -3068,51 +3283,170 @@ HTML_PAGE = """<!DOCTYPE html>
       activeSelectedVideo = null;
     }
 
+    async function parseApiJson(res) {
+      const rawText = await res.text();
+      if (!rawText) {
+        return {};
+      }
+      try {
+        return JSON.parse(rawText);
+      } catch (_parseErr) {
+        const snippet = rawText.replace(/\\s+/g, ' ').trim().slice(0, 180);
+        throw new Error(snippet ? `HTTP ${res.status}: ${snippet}` : `HTTP ${res.status} (${res.statusText || 'Invalid JSON response'})`);
+      }
+    }
+
     async function handleDrawerApprove() {
       if (!activeSelectedVideo) return;
-      const title = document.getElementById('drawer-title-input').value;
-      const privacy = document.getElementById('drawer-privacy-input').value;
-      await approveVideo(activeSelectedVideo.id, title, privacy);
-      closeDrawer();
+      const btn = document.getElementById('drawer-btn-approve');
+      const origHtml = btn ? btn.innerHTML : '';
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = 'Approving...';
+      }
+      try {
+        const title = document.getElementById('drawer-title-input').value;
+        const privacy = document.getElementById('drawer-privacy-input').value;
+        const approved = await approveVideo(activeSelectedVideo.id, title, privacy);
+        if (approved) {
+          closeDrawer();
+        }
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        }
+      }
     }
 
     async function handleDrawerReject() {
       if (!activeSelectedVideo) return;
-      await rejectVideo(activeSelectedVideo.id);
-      closeDrawer();
+      const rejected = await rejectVideo(activeSelectedVideo.id);
+      if (rejected) {
+        closeDrawer();
+      }
+    }
+
+    async function handleDrawerDelete() {
+      if (!activeSelectedVideo || activeSelectedVideo.processing_status !== 'REJECTED') return;
+      const filename = activeSelectedVideo.filename || 'this video';
+      if (!confirm(`Permanently delete ${filename} from StageSync? This cannot be undone.`)) return;
+      const deleted = await deleteVideo(activeSelectedVideo.id);
+      if (deleted) closeDrawer();
     }
 
     async function quickApprove(id) {
+      const video = videosData.find(item => item.id === id);
+      if (video?.identification?.status === 'SUGGESTED') {
+        openSongAssistModal(id);
+        return;
+      }
       await approveVideo(id);
+    }
+
+    async function confirmSuggestedMatch(id) {
+      if (!suggestionPlaybackSeen.has(id)) {
+        showToast({ type: 'warning', title: 'Playback required', message: 'Open the audio review and listen to the clip before confirming this suggestion.' });
+        openSongAssistModal(id);
+        return false;
+      }
+      try {
+        const res = await fetch(`/api/video/${id}/confirm-suggested-match`, { method: 'POST' });
+        const data = await parseApiJson(res);
+        if (!res.ok || !data.success) throw new Error(data.error || `Request failed (HTTP ${res.status})`);
+        await loadData();
+        showToast({ type: 'success', title: 'Suggestion confirmed', message: 'Metadata generated and the video is queued for upload.' });
+        return true;
+      } catch (err) {
+        showToast({ type: 'error', title: 'Could not confirm suggestion', message: err?.message || String(err) });
+        return false;
+      }
     }
 
     async function approveVideo(id, title, privacy) {
       try {
         const payload = {};
         if (title) payload.title = title;
-        if (privacy) payload.privacy = privacy;
+        if (privacy) payload.privacy = String(privacy).toLowerCase();
 
         const res = await fetch(`/api/video/${id}/approve`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        const data = await res.json();
-        if (!data.success) {
-          alert('Failed to approve video: ' + (data.error || 'Server error'));
+        const data = await parseApiJson(res);
+        if (!res.ok || !data.success) {
+          const msg = data.error || `Request failed (HTTP ${res.status})`;
+          showToast({
+            type: 'error',
+            title: 'Failed to Approve Video',
+            message: msg,
+            durationMs: 7500
+          });
+          return false;
         }
         await loadData();
+        showToast({
+          type: 'success',
+          title: 'Video Approved',
+          message: 'Queued for YouTube upload. Click Publish to upload approved clips.',
+          durationMs: 5000
+        });
+        return true;
       } catch (err) {
-        alert('Failed to approve video: ' + err);
+        showToast({
+          type: 'error',
+          title: 'Failed to Approve Video',
+          message: err?.message || String(err),
+          durationMs: 7500
+        });
+        return false;
       }
     }
 
     async function rejectVideo(id) {
       try {
-        await fetch(`/api/video/${id}/reject`, { method: 'POST' });
+        const res = await fetch(`/api/video/${id}/reject`, { method: 'POST' });
+        const data = await parseApiJson(res);
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || `Request failed (HTTP ${res.status})`);
+        }
         await loadData();
+        return true;
       } catch (err) {
-        alert('Failed to reject video: ' + err);
+        showToast({
+          type: 'error',
+          title: 'Failed to Reject Video',
+          message: err?.message || String(err),
+          durationMs: 7000
+        });
+        return false;
+      }
+    }
+
+    async function deleteVideo(id) {
+      try {
+        const res = await fetch(`/api/video/${id}`, { method: 'DELETE' });
+        const data = await parseApiJson(res);
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || `Request failed (HTTP ${res.status})`);
+        }
+        await loadData();
+        showToast({
+          type: 'success',
+          title: 'Video Deleted',
+          message: 'The catalog record and cached media were removed.',
+          durationMs: 5000
+        });
+        return true;
+      } catch (err) {
+        showToast({
+          type: 'error',
+          title: 'Failed to Delete Video',
+          message: err?.message || String(err),
+          durationMs: 7000
+        });
+        return false;
       }
     }
 
@@ -3127,7 +3461,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
       try {
         const res = await fetch(`/api/${action}`, { method: 'POST' });
-        const data = await res.json();
+        const data = await parseApiJson(res);
         if (!res.ok || data.error) {
           throw new Error(data.error || `Request failed (HTTP ${res.status})`);
         }
@@ -3142,11 +3476,12 @@ HTML_PAGE = """<!DOCTYPE html>
           });
         } else if (action === 'upload') {
           const uploaded = data.uploaded_count || 0;
+          const failed = data.failed_count || 0;
           showToast({
-            type: uploaded > 0 ? 'success' : 'info',
-            title: uploaded > 0 ? 'YouTube Upload Complete' : 'No Videos Uploaded',
+            type: failed > 0 && uploaded === 0 ? 'error' : failed > 0 ? 'warning' : uploaded > 0 ? 'success' : 'info',
+            title: failed > 0 && uploaded === 0 ? 'YouTube Upload Failed' : uploaded > 0 ? 'YouTube Upload Complete' : 'No Videos Uploaded',
             message: data.message || (uploaded > 0 ? `Published ${uploaded} approved video(s) to YouTube.` : 'No approved videos were ready or daily upload quota is full.'),
-            durationMs: 6500
+            durationMs: failed > 0 ? 8500 : 6500
           });
         }
       } catch (err) {
@@ -3161,6 +3496,104 @@ HTML_PAGE = """<!DOCTYPE html>
           btn.innerHTML = orig;
           btn.disabled = false;
         }
+      }
+    }
+
+    // =================================================================
+    // MANUAL SETLIST.FM CONCERT SEARCH
+    // =================================================================
+    let activeSetlistAssistVideoId = null;
+    let setlistSearchResults = [];
+
+    function openSetlistAssistModal(id) {
+      if (!id && activeSelectedVideo) id = activeSelectedVideo.id;
+      const v = videosData.find(item => item.id === id);
+      if (!v) return;
+      activeSetlistAssistVideoId = id;
+      const c = v.concert || {};
+      const venue = v.venue || {};
+      document.getElementById('setlist-search-date').value = (c.event_date || v.recorded_at_local || v.recorded_at_utc || '').substring(0, 10);
+      document.getElementById('setlist-search-artist').value = c.headliner_artist && c.headliner_artist !== 'Live Artist' ? c.headliner_artist : '';
+      document.getElementById('setlist-search-venue').value = venue.name && !venue.name.startsWith('Venue near') ? venue.name : '';
+      document.getElementById('setlist-search-city').value = venue.city || '';
+      document.getElementById('setlist-search-tour').value = c.tour_name || '';
+      document.getElementById('setlist-search-results').innerHTML = '<div class="text-center py-6 text-zinc-400 text-xs">Search Setlist.fm for the exact show or tour.</div>';
+      document.getElementById('setlist-assist-modal').classList.remove('hidden');
+    }
+
+    function closeSetlistAssistModal() {
+      document.getElementById('setlist-assist-modal').classList.add('hidden');
+      activeSetlistAssistVideoId = null;
+      setlistSearchResults = [];
+    }
+
+    async function searchSetlistConcerts() {
+      if (!activeSetlistAssistVideoId) return;
+      const fields = {
+        event_date: document.getElementById('setlist-search-date').value,
+        artist_name: document.getElementById('setlist-search-artist').value.trim(),
+        venue_name: document.getElementById('setlist-search-venue').value.trim(),
+        city_name: document.getElementById('setlist-search-city').value.trim(),
+        tour_name: document.getElementById('setlist-search-tour').value.trim(),
+      };
+      if (!Object.values(fields).some(Boolean)) {
+        document.getElementById('setlist-search-results').innerHTML = '<div class="text-center py-6 text-amber-300 text-xs">Enter at least one field before searching.</div>';
+        return;
+      }
+      const btn = document.getElementById('btn-setlist-search');
+      const resultsBox = document.getElementById('setlist-search-results');
+      btn.disabled = true;
+      btn.innerText = 'Searching...';
+      resultsBox.innerHTML = '<div class="text-center py-6 text-zinc-400 text-xs">Searching Setlist.fm...</div>';
+      try {
+        const res = await fetch(`/api/video/${activeSetlistAssistVideoId}/setlist-search`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields)
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || `Search failed (HTTP ${res.status})`);
+        setlistSearchResults = data.concerts || [];
+        if (!setlistSearchResults.length) {
+          resultsBox.innerHTML = '<div class="text-center py-6 text-amber-300 text-xs">No Setlist.fm records matched. Try fewer filters or a different spelling.</div>';
+          return;
+        }
+        resultsBox.innerHTML = setlistSearchResults.map((concert, index) => `
+          <button type="button" onclick="attachSetlistConcert(${index})" class="w-full text-left p-3 rounded-xl bg-card-subtle hover:bg-card-hover border border-border hover:border-emerald-500/50 transition">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="font-bold text-sm text-zinc-100 truncate">${escapeHtml(concert.headliner_artist || 'Unknown artist')}</div>
+                <div class="text-xs text-emerald-300 mt-0.5">${escapeHtml(concert.venue_name || 'Unknown venue')} · ${escapeHtml(concert.city || '')}</div>
+                <div class="text-[11px] text-zinc-400 mt-1">${escapeHtml(concert.event_date || '')}${concert.tour_name ? ` · ${escapeHtml(concert.tour_name)}` : ''} · ${(concert.setlist_songs || []).length} songs</div>
+              </div>
+              <span class="shrink-0 px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 text-[10px] font-semibold">Use this show</span>
+            </div>
+          </button>
+        `).join('');
+      } catch (err) {
+        resultsBox.innerHTML = `<div class="text-center py-6 text-rose-300 text-xs">${escapeHtml(err?.message || String(err))}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.innerText = 'Search Setlist.fm';
+      }
+    }
+
+    async function attachSetlistConcert(index) {
+      const concert = setlistSearchResults[index];
+      if (!activeSetlistAssistVideoId || !concert) return;
+      const resultsBox = document.getElementById('setlist-search-results');
+      resultsBox.innerHTML = '<div class="text-center py-6 text-zinc-400 text-xs">Attaching concert and refreshing metadata...</div>';
+      try {
+        const res = await fetch(`/api/video/${activeSetlistAssistVideoId}/setlist-match`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ concert })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || `Could not attach show (HTTP ${res.status})`);
+        const id = activeSetlistAssistVideoId;
+        closeSetlistAssistModal();
+        await loadData();
+        if (activeSelectedVideo && activeSelectedVideo.id === id) openDrawer(id);
+        showToast({ type: 'success', title: 'Concert Matched', message: `${concert.headliner_artist} · ${concert.event_date} attached from Setlist.fm.`, durationMs: 6000 });
+      } catch (err) {
+        resultsBox.innerHTML = `<div class="text-center py-6 text-rose-300 text-xs">${escapeHtml(err?.message || String(err))}</div>`;
       }
     }
 
@@ -3359,6 +3792,8 @@ HTML_PAGE = """<!DOCTYPE html>
       btn.disabled = true;
 
       try {
+        const sourceVideo = videosData.find(item => item.id === activeVenueAssistVideoId);
+        const recordedDate = sourceVideo ? (sourceVideo.recorded_at_local || sourceVideo.recorded_at_utc || '').substring(0, 10) : '';
         const payload = {
           venue_name: selectedVenueData.name,
           city: selectedVenueData.city,
@@ -3383,18 +3818,56 @@ HTML_PAGE = """<!DOCTYPE html>
         }
 
         const vidId = activeVenueAssistVideoId;
+        const applyPayload = { ...payload, source_video_id: vidId, recorded_date: recordedDate };
         closeVenueAssistModal();
         await loadData();
+
+        if (recordedDate) {
+          const applyToDate = confirm(`Apply ${payload.venue_name} to all other videos recorded on ${recordedDate}?`);
+          if (applyToDate) {
+            await applyVenueToDate(applyPayload);
+          }
+        }
 
         // If drawer is open, refresh it
         if (activeSelectedVideo && activeSelectedVideo.id === vidId) {
           openDrawer(vidId);
+        }
+
+        const bandCandidate = videosData.find(item => {
+          if (item.processing_status !== 'PENDING_REVIEW' || !isBandUnmatched(item)) return false;
+          if (item.id === vidId) return true;
+          const itemDate = item.recorded_at_local ? item.recorded_at_local.substring(0, 10) : (item.recorded_at_utc ? item.recorded_at_utc.substring(0, 10) : '');
+          return Boolean(recordedDate && itemDate === recordedDate);
+        });
+        if (bandCandidate) {
+          openBandAssistModal(bandCandidate.id);
         }
       } catch (err) {
         alert('Failed to update venue: ' + err);
       } finally {
         btn.innerHTML = origText;
         btn.disabled = false;
+      }
+    }
+
+    async function applyVenueToDate(payload) {
+      try {
+        const res = await fetch('/api/videos/apply-venue-to-date', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || `Request failed (HTTP ${res.status})`);
+        }
+        await loadData();
+        const applied = data.applied_ids?.length || 0;
+        const failures = data.errors?.length || 0;
+        alert(`Applied venue to ${applied} other video(s)${failures ? `; ${failures} could not be updated.` : '.'}`);
+      } catch (err) {
+        alert('Failed to apply venue to other videos: ' + (err?.message || err));
       }
     }
 
@@ -3589,6 +4062,7 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     let currentScanMode = 'drive';
+    let currentScanId = null;
 
     function setScanMode(mode) {
       currentScanMode = mode;
@@ -3641,7 +4115,10 @@ HTML_PAGE = """<!DOCTYPE html>
       btn.innerText = 'Scanning...';
       btn.disabled = true;
       const feedback = document.getElementById('scan-feedback-box');
+      const progressBox = document.getElementById('scan-progress-box');
       feedback.classList.add('hidden');
+      progressBox.classList.remove('hidden');
+      updateScanProgress({ current: 0, total: 0, message: 'Starting scan...' });
 
       try {
         let payload = {};
@@ -3694,14 +4171,86 @@ HTML_PAGE = """<!DOCTYPE html>
           return;
         }
 
+        currentScanId = data.scan_id;
+        const completed = await waitForScan(data.scan_id);
+        currentScanId = null;
+        if (completed.status === 'cancelled') {
+          progressBox.classList.add('hidden');
+          feedback.classList.remove('hidden');
+          feedback.innerHTML = '<div class="bg-amber-950/40 border border-amber-800 text-amber-200 p-3 rounded-xl">Scan cancelled.</div>';
+          return;
+        }
+        if (!completed.success || completed.status !== 'completed') {
+          throw new Error(completed.error || 'Discovery scan failed.');
+        }
+
         closeScanModal();
         await loadData();
-        alert(`Discovery completed: Ingested ${data.scanned_count || 0} candidate video(s).`);
+        alert(`Discovery completed: Ingested ${completed.scanned_count || 0} candidate video(s).`);
       } catch (err) {
+        progressBox.classList.add('hidden');
         alert('Scan failed: ' + err);
       } finally {
         btn.innerText = orig;
         btn.disabled = false;
+        const cancelBtn = document.getElementById('btn-cancel-scan');
+        cancelBtn.innerText = 'Cancel';
+        cancelBtn.disabled = false;
+      }
+    }
+
+    function updateScanProgress(data) {
+      const message = document.getElementById('scan-progress-message');
+      const count = document.getElementById('scan-progress-count');
+      const bar = document.getElementById('scan-progress-bar');
+      const progress = bar?.parentElement;
+      if (!message || !count || !bar) return;
+
+      message.innerText = data.message || 'Working...';
+      if (data.total > 0) {
+        const percent = Math.min(100, Math.round((data.current / data.total) * 100));
+        count.innerText = `${data.current} / ${data.total}`;
+        bar.style.width = `${percent}%`;
+        bar.classList.remove('animate-pulse');
+        progress?.setAttribute('aria-valuenow', String(percent));
+      } else {
+        count.innerText = 'Working';
+        bar.style.width = '35%';
+        bar.classList.add('animate-pulse');
+        progress?.setAttribute('aria-valuenow', '0');
+      }
+    }
+
+    async function waitForScan(scanId) {
+      while (true) {
+        const res = await fetch(`/api/scan/${encodeURIComponent(scanId)}`);
+        const data = await res.json();
+        if (!res.ok || !data.success) return data;
+        updateScanProgress(data);
+        if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') return data;
+        await new Promise(resolve => setTimeout(resolve, 750));
+      }
+    }
+
+    async function cancelScan() {
+      if (!currentScanId) {
+        closeScanModal();
+        return;
+      }
+      const btn = document.getElementById('btn-cancel-scan');
+      btn.disabled = true;
+      btn.innerText = 'Stopping...';
+      try {
+        const res = await fetch(`/api/scan/${encodeURIComponent(currentScanId)}/cancel`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Unable to cancel scan.');
+        }
+        updateScanProgress(data);
+      } catch (err) {
+        btn.disabled = false;
+        btn.innerText = 'Cancel';
+        alert('Scan cancellation failed: ' + err);
       }
     }
 
@@ -3794,29 +4343,62 @@ HTML_PAGE = """<!DOCTYPE html>
 """
 
 
+@web.middleware
+async def _api_json_error_middleware(
+    request: web.Request,
+    handler: Any,
+) -> web.StreamResponse:
+    """Guarantee JSON error payloads for all /api/* routes instead of plain-text 500/4xx."""
+    if not request.path.startswith("/api/"):
+        return await handler(request)
+    try:
+        return await handler(request)
+    except web.HTTPException as http_exc:
+        if http_exc.status >= 400 and http_exc.content_type != "application/json":
+            return web.json_response(
+                {"success": False, "error": http_exc.reason or str(http_exc)},
+                status=http_exc.status,
+            )
+        raise
+    except Exception as exc:
+        logger.exception("Unhandled API error on %s %s: %s", request.method, request.path, exc)
+        return web.json_response(
+            {"success": False, "error": str(exc)},
+            status=500,
+        )
+
+
 def create_app(
     coordinator: Optional[PipelineCoordinator] = None,
     db: Optional[Database] = None,
     settings: Optional[Settings] = None,
 ) -> web.Application:
     """Construct and configure the aiohttp web application."""
-    app = web.Application()
+    app = web.Application(middlewares=[_api_json_error_middleware])
     app[SETTINGS_KEY] = settings or get_settings()
     app[DB_KEY] = db or get_db()
     app[COORD_KEY] = coordinator or PipelineCoordinator(db=app[DB_KEY], settings=app[SETTINGS_KEY])
+    app[SCAN_STATE_KEY] = ScanState()
 
     # Register Routes
     app.router.add_get("/", handle_index)
     app.router.add_get("/api/status", handle_get_status)
+    app.router.add_get("/api/scan/{scan_id}", handle_get_scan)
+    app.router.add_post("/api/scan/{scan_id}/cancel", handle_cancel_scan)
     app.router.add_get("/api/videos", handle_list_videos)
     app.router.add_get("/api/video/{id}", handle_get_video)
     app.router.add_get("/api/video/{id}/thumbnail", handle_video_thumbnail)
     app.router.add_get("/api/video/{id}/audio", handle_video_audio)
     app.router.add_get("/api/video/{id}/song-options", handle_song_options)
     app.router.add_get("/api/venues/search", handle_venue_search)
+    app.router.add_post("/api/video/{id}/setlist-search", handle_setlist_search)
+    app.router.add_post("/api/video/{id}/setlist-match", handle_setlist_match)
     app.router.add_post("/api/video/{id}/approve", handle_approve_video)
+    app.router.add_post("/api/video/{id}/confirm-suggested-match", handle_confirm_suggested_match)
     app.router.add_post("/api/video/{id}/reject", handle_reject_video)
+    app.router.add_delete("/api/video/{id}", handle_delete_video)
     app.router.add_post("/api/video/{id}/set-venue", handle_set_video_venue)
+    app.router.add_post("/api/videos/apply-venue-to-date", handle_apply_venue_to_date)
     app.router.add_post("/api/video/{id}/set-band", handle_set_video_band)
     app.router.add_post("/api/video/{id}/set-song", handle_set_video_song)
     app.router.add_post("/api/video/{id}/match", handle_trigger_video_match)
@@ -3883,6 +4465,78 @@ async def handle_get_status(request: web.Request) -> web.Response:
         },
     }
     return web.json_response(payload)
+
+
+def _run_scan_job(
+    coordinator: PipelineCoordinator,
+    job: ScanJob,
+    payload: Dict[str, Any],
+) -> None:
+    def report(current: int, total: int, message: str) -> None:
+        if job.cancel_requested:
+            raise ScanCancelled()
+        job.update(current, total, message)
+
+    try:
+        directory = payload.get("directory")
+        if directory:
+            discovered = coordinator.scan_local_directory(directory, progress_callback=report)
+        elif payload.get("provider") in ("google_drive", "drive") or payload.get("drive"):
+            discovered = coordinator.scan_google_drive(
+                start_date=payload.get("start_date"),
+                end_date=payload.get("end_date"),
+                days=payload.get("days"),
+                folder_id=payload.get("folder_id"),
+                limit=payload.get("limit", 50),
+                dry_run=payload.get("dry_run", False),
+                progress_callback=report,
+            )
+        else:
+            discovered = coordinator.scan_google_photos(
+                start_date=payload.get("start_date"),
+                end_date=payload.get("end_date"),
+                days=payload.get("days"),
+                limit=payload.get("limit", 50),
+                dry_run=payload.get("dry_run", False),
+                progress_callback=report,
+            )
+        if job.cancel_requested:
+            raise ScanCancelled()
+        job.finish(len(discovered))
+    except ScanCancelled:
+        job.cancel()
+    except Exception as exc:
+        logger.exception("Scan job %s failed: %s", job.scan_id, exc)
+        job.fail(str(exc))
+
+
+async def _run_scan_job_async(
+    app: web.Application,
+    job: ScanJob,
+    payload: Dict[str, Any],
+) -> None:
+    try:
+        await asyncio.to_thread(_run_scan_job, app[COORD_KEY], job, payload)
+    finally:
+        app[SCAN_STATE_KEY].finish(job.scan_id)
+
+
+async def handle_get_scan(request: web.Request) -> web.Response:
+    """Return progress for a background discovery scan."""
+    job = request.app[SCAN_STATE_KEY].jobs.get(request.match_info["scan_id"])
+    if not job:
+        return web.json_response({"success": False, "error": "Scan not found"}, status=404)
+    return web.json_response({"success": True, **job.snapshot()})
+
+
+async def handle_cancel_scan(request: web.Request) -> web.Response:
+    """Request cooperative cancellation of a background discovery scan."""
+    job = request.app[SCAN_STATE_KEY].jobs.get(request.match_info["scan_id"])
+    if not job:
+        return web.json_response({"success": False, "error": "Scan not found"}, status=404)
+    if not job.request_cancel():
+        return web.json_response({"success": False, **job.snapshot()}, status=409)
+    return web.json_response({"success": True, **job.snapshot()}, status=202)
 
 
 def serialize_model(obj: Any) -> Any:
@@ -3982,27 +4636,85 @@ async def handle_approve_video(request: web.Request) -> web.Response:
     coordinator: PipelineCoordinator = request.app[COORD_KEY]
     video_id = request.match_info["id"]
 
-    body = {}
+    body: Dict[str, Any] = {}
     if request.can_read_body:
         try:
-            body = await request.json()
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                body = parsed
         except Exception:
             body = {}
 
-    title_override = body.get("title")
-    privacy_str = body.get("privacy")
-    privacy = PrivacyStatus(privacy_str) if privacy_str else None
+    try:
+        title_override = body.get("title")
+        song_title_override = body.get("song_title")
+        artist_override = body.get("artist") or body.get("artist_name")
+        privacy_raw = body.get("privacy")
+        privacy: Optional[PrivacyStatus] = None
+        if privacy_raw is not None and str(privacy_raw).strip():
+            normalized_privacy = str(privacy_raw).strip().lower()
+            try:
+                privacy = PrivacyStatus(normalized_privacy)
+            except ValueError:
+                return web.json_response(
+                    {
+                        "success": False,
+                        "error": f"Invalid privacy status '{privacy_raw}'. Expected public, unlisted, or private.",
+                    },
+                    status=400,
+                )
+
+        approve_kwargs: Dict[str, Any] = {
+            "video_id": video_id,
+            "title_override": title_override,
+            "privacy_override": privacy,
+        }
+        if song_title_override:
+            approve_kwargs["song_title_override"] = song_title_override
+        if artist_override:
+            approve_kwargs["artist_override"] = artist_override
+
+        updated = coordinator.approve_video(**approve_kwargs)
+        return web.json_response({"success": True, "video": serialize_model(updated)})
+    except ValueError as e:
+        return web.json_response({"success": False, "error": str(e)}, status=404)
+    except Exception as e:
+        logger.exception("Failed to approve video %s: %s", video_id, e)
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+async def handle_confirm_suggested_match(request: web.Request) -> web.Response:
+    """Confirm a lyrics-based suggestion after the user has reviewed playback."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    video_id = request.match_info["id"]
+    body: Dict[str, Any] = {}
+    if request.can_read_body:
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                body = parsed
+        except Exception:
+            body = {}
+
+    privacy: Optional[PrivacyStatus] = None
+    if body.get("privacy"):
+        try:
+            privacy = PrivacyStatus(str(body["privacy"]).strip().lower())
+        except ValueError:
+            return web.json_response({"success": False, "error": "Invalid privacy status."}, status=400)
 
     try:
-        updated = coordinator.approve_video(
+        updated = coordinator.confirm_suggested_match(
             video_id=video_id,
-            title_override=title_override,
+            title_override=body.get("title"),
             privacy_override=privacy,
         )
         return web.json_response({"success": True, "video": serialize_model(updated)})
-    except Exception as e:
-        logger.exception("Failed to approve video %s: %s", video_id, e)
-        return web.json_response({"error": str(e)}, status=500)
+    except ValueError as exc:
+        return web.json_response({"success": False, "error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("Failed to confirm suggested match for %s", video_id)
+        return web.json_response({"success": False, "error": str(exc)}, status=500)
 
 
 async def handle_reject_video(request: web.Request) -> web.Response:
@@ -4012,9 +4724,25 @@ async def handle_reject_video(request: web.Request) -> web.Response:
     try:
         updated = coordinator.reject_video(video_id)
         return web.json_response({"success": True, "video": serialize_model(updated)})
+    except ValueError as e:
+        return web.json_response({"success": False, "error": str(e)}, status=404)
     except Exception as e:
         logger.exception("Failed to reject video %s: %s", video_id, e)
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+async def handle_delete_video(request: web.Request) -> web.Response:
+    """Permanently delete a rejected video and its cached media."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    video_id = request.match_info["id"]
+    try:
+        deleted = coordinator.delete_video(video_id)
+        return web.json_response({"success": True, "video": deleted})
+    except ValueError as e:
+        return web.json_response({"success": False, "error": str(e)}, status=400)
+    except Exception as e:
+        logger.exception("Failed to delete video %s: %s", video_id, e)
+        return web.json_response({"success": False, "error": str(e)}, status=500)
 
 
 async def handle_video_thumbnail(request: web.Request) -> web.Response:
@@ -4162,6 +4890,49 @@ async def handle_venue_search(request: web.Request) -> web.Response:
         return web.json_response({"venues": [], "count": 0, "error": str(e)})
 
 
+async def handle_setlist_search(request: web.Request) -> web.Response:
+    """Search Setlist.fm for manually selectable concert records."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    video_id = request.match_info["id"]
+    body = await request.json() if request.can_read_body else {}
+    try:
+        results = await asyncio.to_thread(
+            coordinator.setlist_client.search_concerts,
+            event_date=body.get("event_date"),
+            artist_name=body.get("artist_name"),
+            venue_name=body.get("venue_name"),
+            city_name=body.get("city_name"),
+            tour_name=body.get("tour_name"),
+            state=body.get("state"),
+            country_code=body.get("country_code"),
+        )
+        return web.json_response({"success": True, "video_id": video_id, "concerts": [serialize_model(item) for item in results]})
+    except Exception as exc:
+        logger.exception("Setlist.fm manual search failed for video %s", video_id)
+        return web.json_response({"success": False, "error": str(exc), "concerts": []}, status=502)
+
+
+async def handle_setlist_match(request: web.Request) -> web.Response:
+    """Attach a user-selected Setlist.fm concert to a video."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    video_id = request.match_info["id"]
+    body = await request.json() if request.can_read_body else {}
+    try:
+        matched = MatchedConcert.parse_obj(body.get("concert") or body)
+        video, concert, ident = coordinator.attach_setlist_concert(video_id, matched)
+        return web.json_response({
+            "success": True,
+            "video": serialize_model(video),
+            "concert": serialize_model(concert),
+            "identification": serialize_model(ident),
+        })
+    except ValueError as exc:
+        return web.json_response({"success": False, "error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("Failed to attach Setlist.fm concert to video %s", video_id)
+        return web.json_response({"success": False, "error": str(exc)}, status=500)
+
+
 async def handle_set_video_venue(request: web.Request) -> web.Response:
     """Associate venue with video and re-run concert matching and setlist identification."""
     coordinator: PipelineCoordinator = request.app[COORD_KEY]
@@ -4204,6 +4975,39 @@ async def handle_set_video_venue(request: web.Request) -> web.Response:
         })
     except Exception as e:
         logger.exception("Failed to set venue for video %s: %s", video_id, e)
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+async def handle_apply_venue_to_date(request: web.Request) -> web.Response:
+    """Apply a selected venue to other cataloged videos from the same date."""
+    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    body = await request.json() if request.can_read_body else {}
+    recorded_date = (body.get("recorded_date") or "").strip()
+    venue_name = (body.get("venue_name") or "").strip()
+    source_video_id = (body.get("source_video_id") or "").strip()
+    if not recorded_date or not venue_name or not source_video_id:
+        return web.json_response(
+            {"success": False, "error": "Missing recorded_date, venue_name, or source_video_id"},
+            status=400,
+        )
+
+    try:
+        result = coordinator.apply_venue_to_date(
+            source_video_id=source_video_id,
+            recorded_date=recorded_date,
+            venue_name=venue_name,
+            city=body.get("city"),
+            state_province=body.get("state_province") or body.get("state"),
+            country_code=body.get("country_code") or body.get("country") or "US",
+            latitude=float(body["latitude"]) if body.get("latitude") is not None else None,
+            longitude=float(body["longitude"]) if body.get("longitude") is not None else None,
+            setlist_fm_venue_id=body.get("setlist_fm_venue_id"),
+            osm_id=body.get("osm_id"),
+            formatted_address=body.get("formatted_address"),
+        )
+        return web.json_response({"success": True, **result})
+    except Exception as e:
+        logger.exception("Failed applying venue to %s videos: %s", recorded_date, e)
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
 
@@ -4357,8 +5161,7 @@ async def handle_trigger_batch_song_match(request: web.Request) -> web.Response:
 
 
 async def handle_trigger_scan(request: web.Request) -> web.Response:
-    """Trigger Google Photos or local directory discovery scan."""
-    coordinator: PipelineCoordinator = request.app[COORD_KEY]
+    """Start a Google Photos, Google Drive, or local discovery scan in the background."""
     body = {}
     if request.can_read_body:
         try:
@@ -4366,80 +5169,31 @@ async def handle_trigger_scan(request: web.Request) -> web.Response:
         except Exception:
             body = {}
 
-    directory = body.get("directory")
-    if directory:
-        try:
-            discovered = coordinator.scan_local_directory(directory)
-            return web.json_response({
-                "success": True,
-                "scanned_count": len(discovered),
-                "mode": "local_directory",
-            })
-        except Exception as e:
-            logger.exception("Failed to scan local directory %s: %s", directory, e)
-            return web.json_response({
-                "success": False,
-                "error": str(e),
-                "scanned_count": 0,
-                "mode": "local_directory",
-            })
+    payload = dict(body)
+    if payload.get("days"):
+        payload["days"] = int(payload["days"])
+    payload["limit"] = int(payload.get("limit", 50))
+    if payload.get("directory"):
+        mode = "local_directory"
+    else:
+        provider = payload.get("provider", "google_drive" if payload.get("drive") else "google_photos")
+        mode = "google_drive" if provider in ("google_drive", "drive") or payload.get("drive") else "google_photos"
 
-    start_date = body.get("start_date")
-    end_date = body.get("end_date")
-    days_val = int(body["days"]) if body.get("days") else None
-    limit_val = int(body.get("limit", 50))
-    dry_run = bool(body.get("dry_run", False))
-    provider = body.get("provider", "google_drive" if body.get("drive") else "google_photos")
-
-    if provider in ("google_drive", "drive") or body.get("drive"):
-        folder_id = body.get("folder_id")
-        try:
-            discovered = coordinator.scan_google_drive(
-                start_date=start_date,
-                end_date=end_date,
-                days=days_val,
-                folder_id=folder_id,
-                limit=limit_val,
-                dry_run=dry_run,
-            )
-            return web.json_response({
-                "success": True,
-                "scanned_count": len(discovered),
-                "mode": "google_drive",
-            })
-        except Exception as e:
-            logger.warning("Failed to scan Google Drive: %s", e)
-            return web.json_response({
-                "success": False,
-                "error": str(e),
-                "scanned_count": 0,
-                "mode": "google_drive",
-            })
-
-    try:
-        discovered = coordinator.scan_google_photos(
-            start_date=start_date,
-            end_date=end_date,
-            days=days_val,
-            limit=limit_val,
-            dry_run=dry_run,
-        )
-        return web.json_response({
-            "success": True,
-            "scanned_count": len(discovered),
-            "mode": "google_photos",
-        })
-    except Exception as e:
-        logger.warning("Failed to scan Google Photos: %s", e)
-        err_msg = str(e)
-        is_scope_error = "403" in err_msg or "insufficient" in err_msg.lower()
+    scan_state: ScanState = request.app[SCAN_STATE_KEY]
+    job = scan_state.start(mode)
+    if not job:
         return web.json_response({
             "success": False,
-            "error": err_msg,
-            "is_scope_error": is_scope_error,
-            "scanned_count": 0,
-            "mode": "google_photos",
-        })
+            "error": "A discovery scan is already running.",
+        }, status=409)
+
+    asyncio.create_task(_run_scan_job_async(request.app, job, payload))
+    return web.json_response({
+        "success": True,
+        "scan_id": job.scan_id,
+        "mode": mode,
+        "status": "running",
+    }, status=202)
 
 
 async def handle_picker_create(request: web.Request) -> web.Response:
@@ -4502,19 +5256,23 @@ async def handle_trigger_upload(request: web.Request) -> web.Response:
     try:
         results = await asyncio.to_thread(coordinator.upload_approved_videos)
         uploaded_count = len([r for r in results if r.success])
-        failed_count = len([r for r in results if not r.success])
+        failed_results = [r for r in results if not r.success]
+        failed_count = len(failed_results)
+        failure_details = [r.error_message for r in failed_results if r.error_message]
+        first_reason = f" Reason: {failure_details[0]}" if failure_details else ""
         if uploaded_count and failed_count:
-            message = f"Uploaded {uploaded_count} video{'s' if uploaded_count != 1 else ''}; {failed_count} failed."
+            message = f"Uploaded {uploaded_count} video{'s' if uploaded_count != 1 else ''}; {failed_count} failed.{first_reason}"
         elif uploaded_count:
             message = f"Uploaded {uploaded_count} approved video{'s' if uploaded_count != 1 else ''} to YouTube."
         elif failed_count:
-            message = f"All {failed_count} approved video upload{'s' if failed_count != 1 else ''} failed."
+            message = f"All {failed_count} approved video upload{'s' if failed_count != 1 else ''} failed.{first_reason}"
         else:
             message = "No approved videos were queued for YouTube upload."
         return web.json_response({
             "success": True,
             "uploaded_count": uploaded_count,
             "failed_count": failed_count,
+            "errors": failure_details,
             "message": message,
         })
     except Exception as e:

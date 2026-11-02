@@ -327,6 +327,20 @@ class Database:
             return None
         return self._row_to_video(row)
 
+    def get_video_by_file_hash(self, file_hash_sha256: str) -> Optional[Video]:
+        """Fetch the first cataloged video with the same content hash."""
+        sql = """
+        SELECT * FROM videos
+        WHERE file_hash_sha256 = :file_hash_sha256
+        ORDER BY created_at ASC
+        LIMIT 1
+        """
+        conn = self._get_connection()
+        row = conn.execute(sql, {"file_hash_sha256": file_hash_sha256}).fetchone()
+        if not row:
+            return None
+        return self._row_to_video(row)
+
     def update_video_status(self, video_id: str, status: VideoStatus) -> None:
         """Update processing status for a video."""
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -500,7 +514,8 @@ class Database:
         SELECT * FROM venues
         WHERE latitude BETWEEN :min_lat AND :max_lat
           AND longitude BETWEEN :min_lon AND :max_lon
-        ORDER BY ((latitude - :lat) * (latitude - :lat) + (longitude - :lon) * (longitude - :lon)) ASC
+        ORDER BY ((latitude - :lat) * (latitude - :lat) + (longitude - :lon) * (longitude - :lon)) ASC,
+                 updated_at DESC
         LIMIT 1
         """
         conn = self._get_connection()

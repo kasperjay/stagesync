@@ -1,6 +1,8 @@
 """Unit tests for StageSync Web Dashboard & REST Server."""
 
 import unittest
+import asyncio
+import threading
 from pathlib import Path
 import tempfile
 from unittest.mock import MagicMock
@@ -44,9 +46,43 @@ class TestWebServer(AioHTTPTestCase):
         self.assertIn("refreshVideoStill", text)
         self.assertIn("const songUnmatched = isSongUnmatched(v);", text)
         self.assertIn("const needsSongAssist = songUnmatched && Boolean(knownArtistForVideo(v));", text)
+        self.assertIn("'various artists'", text)
+        self.assertIn("const bandCandidate = videosData.find(item =>", text)
         self.assertIn("const needsVenueAssist = !hasKnownVenue;", text)
         self.assertIn("${needsVenueAssist ? `", text)
         self.assertIn("${needsSongAssist ? `", text)
+        self.assertIn("const groupedByDate = pending.reduce", text)
+        self.assertIn("const reviewDates = Object.keys(groupedByDate).sort", text)
+        self.assertIn("const dateSections = reviewDates.map", text)
+        self.assertIn("concert.event_date || (video.recorded_at_local", text)
+        self.assertIn("scan-progress-box", text)
+        self.assertIn("waitForScan", text)
+        self.assertIn("Delete Permanently", text)
+        self.assertIn("Search exact concert / tour on Setlist.fm", text)
+        self.assertIn("openSetlistAssistModal", text)
+        self.assertIn("setlist-match", text)
+
+    async def test_setlist_search_endpoint(self):
+        self.mock_coord.setlist_client.search_concerts.return_value = []
+
+        resp = await self.client.post(
+            "/api/video/v_123/setlist-search",
+            json={"event_date": "2024-08-15", "artist_name": "Artist"},
+        )
+
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["concerts"], [])
+        self.mock_coord.setlist_client.search_concerts.assert_called_once_with(
+            event_date="2024-08-15",
+            artist_name="Artist",
+            venue_name=None,
+            city_name=None,
+            tour_name=None,
+            state=None,
+            country_code=None,
+        )
 
     async def test_get_status_json(self):
         """Verify /api/status returns valid system statistics."""
@@ -126,18 +162,37 @@ class TestWebServer(AioHTTPTestCase):
         self.assertTrue(data["success"])
         self.mock_coord.reject_video.assert_called_once_with("v_123")
 
+    async def test_delete_video_endpoint(self):
+        """Verify DELETE removes a previously rejected video."""
+        self.mock_coord.delete_video.return_value = {"id": "v_123", "filename": "live.mp4"}
+
+        resp = await self.client.delete("/api/video/v_123")
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["video"]["id"], "v_123")
+        self.mock_coord.delete_video.assert_called_once_with("v_123")
+
     async def test_scan_local_directory_endpoint(self):
         """Verify /api/scan with directory invokes scan_local_directory."""
         fake_video = Video(source_photo_id="loc_1", filename="clip.mp4")
         self.mock_coord.scan_local_directory.return_value = [fake_video]
 
         resp = await self.client.post("/api/scan", json={"directory": "/tmp/videos"})
-        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.status, 202)
         data = await resp.json()
         self.assertTrue(data["success"])
-        self.assertEqual(data["scanned_count"], 1)
+        self.assertEqual(data["status"], "running")
         self.assertEqual(data["mode"], "local_directory")
-        self.mock_coord.scan_local_directory.assert_called_once_with("/tmp/videos")
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            progress = await self.client.get(f"/api/scan/{data['scan_id']}")
+            progress_data = await progress.json()
+            if progress_data["status"] != "running":
+                break
+        self.assertEqual(progress_data["status"], "completed")
+        self.assertEqual(progress_data["scanned_count"], 1)
+        self.mock_coord.scan_local_directory.assert_called_once()
 
     async def test_scan_google_drive_endpoint(self):
         """Verify /api/scan with provider=google_drive calls scan_google_drive."""
@@ -145,12 +200,59 @@ class TestWebServer(AioHTTPTestCase):
         self.mock_coord.scan_google_drive.return_value = [fake_video]
 
         resp = await self.client.post("/api/scan", json={"provider": "google_drive", "days": 30})
-        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.status, 202)
         data = await resp.json()
         self.assertTrue(data["success"])
-        self.assertEqual(data["scanned_count"], 1)
+        self.assertEqual(data["status"], "running")
         self.assertEqual(data["mode"], "google_drive")
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            progress = await self.client.get(f"/api/scan/{data['scan_id']}")
+            progress_data = await progress.json()
+            if progress_data["status"] != "running":
+                break
+        self.assertEqual(progress_data["status"], "completed")
+        self.assertEqual(progress_data["scanned_count"], 1)
         self.mock_coord.scan_google_drive.assert_called_once()
+
+    async def test_scan_cancel_endpoint_stops_active_scan(self):
+        """Verify cancelling an active scan stops it at the next progress checkpoint."""
+        release_scan = threading.Event()
+
+        def blocking_scan(*args, **kwargs):
+            progress_callback = kwargs["progress_callback"]
+            progress_callback(0, 1, "Processing test video")
+            release_scan.wait(timeout=2)
+            progress_callback(1, 1, "Finished test video")
+            return [Video(source_photo_id="drive_1", filename="drive_clip.mp4")]
+
+        self.mock_coord.scan_google_drive.side_effect = blocking_scan
+
+        resp = await self.client.post("/api/scan", json={"provider": "google_drive"})
+        data = await resp.json()
+        scan_id = data["scan_id"]
+        await asyncio.sleep(0.02)
+
+        cancel_resp = await self.client.post(f"/api/scan/{scan_id}/cancel")
+        cancel_data = await cancel_resp.json()
+        self.assertEqual(cancel_resp.status, 202)
+        self.assertTrue(cancel_data["success"])
+        self.assertEqual(cancel_data["status"], "cancelling")
+
+        release_scan.set()
+        for _ in range(30):
+            await asyncio.sleep(0.01)
+            progress = await self.client.get(f"/api/scan/{scan_id}")
+            progress_data = await progress.json()
+            if progress_data["status"] != "cancelling":
+                break
+        self.assertEqual(progress_data["status"], "cancelled")
+
+        self.mock_coord.scan_google_drive.side_effect = None
+        self.mock_coord.scan_google_drive.return_value = []
+        restart_resp = await self.client.post("/api/scan", json={"provider": "google_drive"})
+        self.assertEqual(restart_resp.status, 202)
+        release_scan.set()
 
     async def test_scan_google_photos_scope_error_handling(self):
         """Verify 403 insufficient scopes error returns transparent diagnostics."""
@@ -159,11 +261,17 @@ class TestWebServer(AioHTTPTestCase):
         )
 
         resp = await self.client.post("/api/scan", json={"start_date": "2024-01-01"})
-        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.status, 202)
         data = await resp.json()
-        self.assertFalse(data["success"])
-        self.assertTrue(data["is_scope_error"])
-        self.assertIn("insufficient authentication scopes", data["error"])
+        self.assertTrue(data["success"])
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            progress = await self.client.get(f"/api/scan/{data['scan_id']}")
+            progress_data = await progress.json()
+            if progress_data["status"] != "running":
+                break
+        self.assertEqual(progress_data["status"], "failed")
+        self.assertIn("insufficient authentication scopes", progress_data["error"])
 
     async def test_picker_create_and_poll_endpoints(self):
         """Verify /api/picker/create and /api/picker/poll flow."""
@@ -322,6 +430,28 @@ class TestWebServer(AioHTTPTestCase):
         data = await resp.json()
         self.assertFalse(data["success"])
         self.assertIn("Missing venue_name", data["error"])
+
+    async def test_apply_venue_to_date_endpoint(self):
+        """Verify date-scoped venue application delegates to the coordinator."""
+        self.mock_coord.apply_venue_to_date.return_value = {
+            "recorded_date": "2024-08-15",
+            "applied_ids": ["v_101", "v_102"],
+            "errors": [],
+        }
+        resp = await self.client.post(
+            "/api/videos/apply-venue-to-date",
+            json={
+                "source_video_id": "v_100",
+                "recorded_date": "2024-08-15",
+                "venue_name": "Come and Take It Live",
+                "city": "Austin",
+            },
+        )
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["applied_ids"], ["v_101", "v_102"])
+        self.mock_coord.apply_venue_to_date.assert_called_once()
 
     async def test_set_video_band_endpoint(self):
         """Verify /api/video/{id}/set-band assigns band to video from show lineup."""
@@ -611,6 +741,101 @@ class TestWebServer(AioHTTPTestCase):
             self.assertEqual(await resp2.read(), b"compact faststart m4a audio")
             self.mock_coord.audio_extractor.extract_full_audio.assert_called_once()
 
+    async def test_approve_video_uppercase_privacy_and_invalid_privacy_return_json(self):
+        """Verify /api/video/{id}/approve normalizes uppercase privacy and returns JSON 400 on invalid privacy."""
+        fake_video = Video(
+            id="v_upper",
+            source_photo_id="sp_upper",
+            filename="live.mov",
+            processing_status=VideoStatus.APPROVED,
+        )
+        self.mock_coord.approve_video.return_value = fake_video
+
+        resp = await self.client.post(
+            "/api/video/v_upper/approve",
+            json={"title": "Gideon - Take Off (Live)", "privacy": "UNLISTED"},
+        )
+        self.assertEqual(resp.status, 200)
+        data = await resp.json()
+        self.assertTrue(data["success"])
+        self.mock_coord.approve_video.assert_called_once_with(
+            video_id="v_upper",
+            title_override="Gideon - Take Off (Live)",
+            privacy_override=PrivacyStatus.UNLISTED,
+        )
+
+        bad_resp = await self.client.post(
+            "/api/video/v_upper/approve",
+            json={"privacy": "INVALID_PRIVACY"},
+        )
+        self.assertEqual(bad_resp.status, 400)
+        self.assertEqual(bad_resp.content_type, "application/json")
+        bad_data = await bad_resp.json()
+        self.assertFalse(bad_data["success"])
+        self.assertIn("Invalid privacy status", bad_data["error"])
+
+
+class TestWebServerApproveRealCoordinator(AioHTTPTestCase):
+    """End-to-end integration test of /api/video/{id}/approve against real PipelineCoordinator & SQLite."""
+
+    async def get_application(self):
+        from stagesync.config import Settings
+        from stagesync.database.connection import Database
+        from stagesync.pipeline import PipelineCoordinator
+
+        self.temp_dir = tempfile.TemporaryDirectory()
+        tmp_path = Path(self.temp_dir.name)
+        self.real_db = Database(tmp_path / "approve_e2e.db")
+        self.real_settings = Settings(
+            db_path=tmp_path / "approve_e2e.db",
+            cache_dir=tmp_path / "cache",
+        )
+        self.real_coord = PipelineCoordinator(db=self.real_db, settings=self.real_settings)
+        return create_app(
+            coordinator=self.real_coord,
+            db=self.real_db,
+            settings=self.real_settings,
+        )
+
+    async def tearDownAsync(self):
+        await super().tearDownAsync()
+        self.temp_dir.cleanup()
+
+    async def test_approve_video_persists_title_override_and_privacy_with_real_coordinator(self):
+        """Ensure real PipelineCoordinator.approve_video accepts title_override and queues YouTubeUpload."""
+        video = Video(
+            id="v_real_1",
+            source_photo_id="sp_real_1",
+            filename="IMG_6147.MOV",
+            duration_seconds=52.0,
+            processing_status=VideoStatus.PENDING_REVIEW,
+        )
+        self.real_db.save_video(video)
+
+        resp = await self.client.post(
+            "/api/video/v_real_1/approve",
+            json={
+                "title": "Gideon - Take Off (Live at Come and Take It Live, Austin - Oct 13, 2023)",
+                "privacy": "PUBLIC",
+            },
+        )
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.content_type, "application/json")
+        payload = await resp.json()
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["video"]["processing_status"], "APPROVED")
+
+        saved_video = self.real_db.get_video("v_real_1")
+        self.assertEqual(saved_video.processing_status, VideoStatus.APPROVED)
+
+        upload_job = self.real_db.get_youtube_upload_by_video_id("v_real_1")
+        self.assertIsNotNone(upload_job)
+        self.assertEqual(
+            upload_job.title,
+            "Gideon - Take Off (Live at Come and Take It Live, Austin - Oct 13, 2023)",
+        )
+        self.assertEqual(upload_job.privacy_status, PrivacyStatus.PUBLIC)
+        self.assertEqual(upload_job.upload_status, "QUEUED")
 
 
 if __name__ == "__main__":
