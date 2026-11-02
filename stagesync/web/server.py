@@ -772,8 +772,9 @@ HTML_PAGE = """<!DOCTYPE html>
                 <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                 Change / Search Venue →
               </button>
-              <button type="button" onclick="openSetlistAssistModal(activeSelectedVideo ? activeSelectedVideo.id : '')" class="mt-1 text-[10px] font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1">
-                Search exact concert / tour on Setlist.fm →
+              <button type="button" onclick="openSetlistAssistModal(activeSelectedVideo ? activeSelectedVideo.id : '')" class="mt-2 w-full justify-center px-2.5 py-2 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold flex items-center gap-1.5 transition">
+                <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M21 10.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l2.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z"/><path d="M8 12h.01M12 12h.01M16 12h.01"/></svg>
+                Search exact concert / tour on Setlist.fm
               </button>
             </div>
             <div class="bg-canvas p-2.5 rounded-xl border border-border">
@@ -3073,6 +3074,10 @@ HTML_PAGE = """<!DOCTYPE html>
                     <span>What venue is this?</span>
                   </button>
                 `}
+                <button type="button" onclick="event.stopPropagation(); openSetlistAssistModal('${v.id}')" class="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1">
+                  <span>Search exact concert / tour on Setlist.fm</span>
+                  <span>→</span>
+                </button>
               </div>
               <div class="flex items-center gap-2">
                 <button onclick="rejectVideo('${v.id}')" class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-card-subtle hover:bg-rose-950/40 hover:text-rose-300 hover:border-rose-800 border border-border transition">
