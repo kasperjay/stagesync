@@ -1332,7 +1332,11 @@ HTML_PAGE = """<!DOCTYPE html>
       const ident = v?.identification || {};
       const c = v?.concert || {};
       const artist = ident.detected_artist || c.headliner_artist || '';
-      return ['live artist', 'unknown artist', 'unknown', 'various artists'].includes(artist.trim().toLowerCase()) ? '' : artist;
+      return isPlaceholderArtist(artist) ? '' : artist;
+    }
+
+    function isPlaceholderArtist(artist) {
+      return ['live artist', 'unknown artist', 'unknown', 'various artists'].includes(String(artist || '').trim().toLowerCase());
     }
 
     function isVenueUnmatched(v) {
@@ -1344,11 +1348,11 @@ HTML_PAGE = """<!DOCTYPE html>
       if (!v) return [];
       const c = v.concert;
       if (!c) return [];
-      const list = [...(c.lineup_artists || [])];
-      if (c.headliner_artist && !list.includes(c.headliner_artist)) {
+      const list = [...(c.lineup_artists || [])].filter(artist => artist && !isPlaceholderArtist(artist));
+      if (c.headliner_artist && !isPlaceholderArtist(c.headliner_artist) && !list.includes(c.headliner_artist)) {
         list.unshift(c.headliner_artist);
       }
-      return list.length > 0 ? list : (c.headliner_artist ? [c.headliner_artist] : []);
+      return list;
     }
 
     function isBandUnmatched(v) {
