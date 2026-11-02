@@ -240,6 +240,7 @@ class SetlistFmClient:
             params["countryCode"] = country_code.strip().upper()
 
         results: List[MatchedConcert] = []
+        raw_results: List[Dict[str, Any]] = []
         seen_ids = set()
         for page in range(1, max_pages + 1):
             data = self._fetch_setlists_raw({**params, "p": str(page)})
@@ -252,12 +253,79 @@ class SetlistFmClient:
                     continue
                 if event_id:
                     seen_ids.add(event_id)
-                results.append(self.parse_setlist_payload(raw_setlist, event_date or ""))
-                if len(results) >= max_results:
-                    return results
+                raw_results.append(raw_setlist)
+                if len(raw_results) >= max_results:
+                    break
+            if len(raw_results) >= max_results:
+                break
             if len(raw_setlists) < 20:
                 break
+
+        grouped_setlists = self._group_setlists_by_show(raw_results)
+        lineup_cache: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
+        for raw_setlist in raw_results:
+            show_setlists = grouped_setlists[self._show_key(raw_setlist)]
+            if len(show_setlists) == 1 and artist_name:
+                show_key = self._show_key(raw_setlist)
+                if show_key not in lineup_cache:
+                    lineup_cache[show_key] = self._fetch_show_lineup(raw_setlist)
+                show_setlists = lineup_cache[show_key]
+
+            result = self.parse_setlist_payload(
+                raw_setlist,
+                event_date or "",
+                all_setlists=show_setlists,
+            )
+            results.append(result)
+
         return results
+
+    @staticmethod
+    def _show_key(item: Dict[str, Any]) -> Tuple[str, str, str]:
+        """Build a stable key for setlists belonging to the same show."""
+        venue = item.get("venue", {}) or {}
+        city = venue.get("city", {}) or {}
+        event_date = item.get("eventDate", "")
+        venue_id = venue.get("id") or venue.get("name", "")
+        city_name = city.get("name", "")
+        return (str(event_date), str(venue_id).casefold(), str(city_name).casefold())
+
+    def _group_setlists_by_show(
+        self,
+        setlists: List[Dict[str, Any]],
+    ) -> Dict[Tuple[str, str, str], List[Dict[str, Any]]]:
+        grouped: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
+        for item in setlists:
+            grouped.setdefault(self._show_key(item), []).append(item)
+        return grouped
+
+    def _fetch_show_lineup(
+        self,
+        item: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Fetch all artist setlists for a selected show when artist filtering hid the bill."""
+        venue = item.get("venue", {}) or {}
+        city = venue.get("city", {}) or {}
+        params: Dict[str, str] = {
+            "date": str(item.get("eventDate", "")),
+        }
+        if venue.get("name"):
+            params["venueName"] = venue["name"]
+        if city.get("name"):
+            params["cityName"] = city["name"]
+        if city.get("state"):
+            params["state"] = city["state"]
+        country = (city.get("country") or {}).get("code")
+        if country:
+            params["countryCode"] = country
+        data = self._fetch_setlists_raw(params)
+        lineup = data.get("setlist", []) if data else []
+        if not lineup:
+            return [item]
+
+        show_key = self._show_key(item)
+        matching = [candidate for candidate in lineup if self._show_key(candidate) == show_key]
+        return matching or [item]
 
     def _fetch_setlists_raw(self, params: Dict[str, str]) -> Optional[Dict[str, Any]]:
         """Execute HTTP request against Setlist.fm search endpoint."""

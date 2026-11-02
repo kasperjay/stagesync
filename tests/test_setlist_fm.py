@@ -109,7 +109,20 @@ class TestSetlistFm(unittest.TestCase):
                 "url": "https://www.setlist.fm/setlist/event-1",
             }]
         }
-        with patch.object(self.client, "_fetch_setlists_raw", return_value=payload) as fetch:
+        lineup_payload = {
+            "setlist": [
+                payload["setlist"][0],
+                {
+                    "id": "event-1-support",
+                    "eventDate": "15-08-2024",
+                    "artist": {"name": "Artist B"},
+                    "venue": {"id": "venue-1", "name": "The Venue", "city": {"name": "Austin", "country": {"code": "US"}}},
+                    "tour": {"name": "Summer Tour"},
+                    "sets": {"set": [{"song": [{"name": "Song B"}]}]},
+                },
+            ]
+        }
+        with patch.object(self.client, "_fetch_setlists_raw", side_effect=[payload, lineup_payload]) as fetch:
             results = self.client.search_concerts(
                 event_date="2024-08-15",
                 artist_name="Artist A",
@@ -120,12 +133,19 @@ class TestSetlistFm(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].setlist_fm_event_id, "event-1")
         self.assertEqual(results[0].tour_name, "Summer Tour")
-        fetch.assert_called_once_with({
+        self.assertEqual(results[0].lineup_artists, ["Artist A", "Artist B"])
+        self.assertEqual(fetch.call_args_list[0].args[0], {
             "date": "15-08-2024",
             "artistName": "Artist A",
             "venueName": "The Venue",
             "tourName": "Summer Tour",
             "p": "1",
+        })
+        self.assertEqual(fetch.call_args_list[1].args[0], {
+            "date": "15-08-2024",
+            "venueName": "The Venue",
+            "cityName": "Austin",
+            "countryCode": "US",
         })
 
 
