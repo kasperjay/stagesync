@@ -182,7 +182,7 @@ class Settings(BaseModel):
         default_factory=lambda: float(os.getenv("STAGESYNC_MAX_DURATION_SECONDS", "900.0"))
     )
     concert_time_filter_enabled: bool = Field(
-        default_factory=lambda: os.getenv("STAGESYNC_CONCERT_TIME_FILTER_ENABLED", "true").lower()
+        default_factory=lambda: os.getenv("STAGESYNC_CONCERT_TIME_FILTER_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"}
     )
     concert_start_time: str = Field(

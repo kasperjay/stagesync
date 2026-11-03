@@ -74,7 +74,7 @@ class PipelineCoordinator:
             if duration_seconds > getattr(self.settings, "max_duration_seconds", 900.0):
                 return False
 
-        if not recorded_at or not getattr(self.settings, "concert_time_filter_enabled", True):
+        if not recorded_at or not getattr(self.settings, "concert_time_filter_enabled", False):
             return True
 
         if isinstance(recorded_at, datetime.datetime):

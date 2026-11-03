@@ -298,7 +298,7 @@ class TestGoogleDrive(unittest.TestCase):
 
         self.assertEqual([video.filename for video in videos], ["In_Range.MOV"])
 
-    def test_pipeline_filters_drive_non_concert_duration_and_time_before_cataloging(self) -> None:
+    def test_pipeline_accepts_daytime_videos_and_filters_long_videos(self) -> None:
         coordinator = PipelineCoordinator(db=self.db)
         coordinator.drive_client = MagicMock()
         coordinator.drive_client.list_videos.return_value = (
@@ -339,7 +339,7 @@ class TestGoogleDrive(unittest.TestCase):
 
         videos = coordinator.scan_google_drive(folder_id="folder_abc", dry_run=True)
 
-        self.assertEqual([video.filename for video in videos], ["Concert.MOV"])
+        self.assertEqual([video.filename for video in videos], ["Daytime_NonConcert.MOV", "Concert.MOV"])
 
     def test_is_likely_video_file_filter(self) -> None:
         """Verify is_likely_video_file rejects code, presets, and small false-positives."""
