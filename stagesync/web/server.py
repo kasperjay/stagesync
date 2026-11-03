@@ -725,7 +725,12 @@ HTML_PAGE = """<!DOCTYPE html>
           </div>
 
           <div>
-            <h3 id="drawer-artist-name" class="text-lg font-bold text-white tracking-tight">Artist Name</h3>
+            <div class="flex items-center gap-2">
+              <h3 id="drawer-artist-name" class="text-lg font-bold text-white tracking-tight">Artist Name</h3>
+              <button type="button" id="drawer-artist-edit" onclick="openBandAssistModal(activeSelectedVideo ? activeSelectedVideo.id : '')" aria-label="Change artist" title="Change artist" class="hidden p-1 rounded-md text-zinc-400 hover:text-brand-300 hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 transition">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+              </button>
+            </div>
             <div id="drawer-song-title" class="text-base text-brand-400 font-semibold mt-0.5">Song Title</div>
           </div>
 
@@ -785,22 +790,6 @@ HTML_PAGE = """<!DOCTYPE html>
           </div>
         </div>
 
-        <!-- Change artist (Concert Lineup Assistant) -->
-        <div id="drawer-band-assist-section" class="hidden bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 space-y-3">
-          <div class="flex items-center justify-between">
-            <span class="text-[10px] font-bold tracking-wider uppercase text-amber-400 flex items-center gap-1.5">
-              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
-              Change Artist
-            </span>
-            <button type="button" onclick="openBandAssistModal(activeSelectedVideo ? activeSelectedVideo.id : '')" class="text-[10px] text-amber-300 font-semibold hover:underline flex items-center gap-1">
-              Choose from lineup →
-            </button>
-          </div>
-          <p class="text-[11px] text-zinc-300 leading-snug">Correct the matched performer if StageSync selected the wrong artist. Changing it sends this video back to Needs Review.</p>
-          <div id="drawer-band-chips" class="flex flex-wrap gap-1.5 pt-1">
-            <!-- Dynamic band buttons -->
-          </div>
-        </div>
 
         <!-- Video Technical Specs -->
         <div class="bg-card-subtle border border-border rounded-2xl p-4 space-y-3">
@@ -2771,14 +2760,17 @@ HTML_PAGE = """<!DOCTYPE html>
               </div>
             </div>
 
-            <button type="button" onclick="openDrawer('${v.id}')" class="w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded-lg space-y-2 block">
+            <div class="w-full text-left rounded-lg space-y-2 block">
               <div class="flex items-center justify-between text-[11px]">
                 <span class="font-mono text-zinc-400 truncate max-w-[130px]">${v.filename}</span>
                 <span class="font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[10px]">${durStr}</span>
               </div>
 
               <div>
-                <div class="font-bold text-xs text-zinc-100 group-hover:text-brand-300 transition line-clamp-1">${artist}</div>
+                <button type="button" onclick="event.stopPropagation(); openBandAssistModal('${v.id}')" aria-label="Change artist" title="Change artist" class="group/artist flex items-center gap-1.5 text-left font-bold text-xs text-zinc-100 group-hover:text-brand-300 transition line-clamp-1 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                  <span class="truncate">${artist}</span>
+                  <svg class="w-3.5 h-3.5 flex-shrink-0 text-zinc-500 opacity-0 group-hover/artist:opacity-100 group-focus-visible/artist:opacity-100 transition" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                </button>
                 <div class="text-xs text-brand-400 font-medium line-clamp-1">${song}</div>
               </div>
 
@@ -2786,7 +2778,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 <svg class="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /></svg>
                 <span class="truncate ${!hasKnownVenue ? 'text-amber-400 italic' : ''}">${venue}</span>
               </div>
-            </button>
+            </div>
 
             ${renderVideoMatchBanner(v.id, true)}
 
@@ -2798,7 +2790,7 @@ HTML_PAGE = """<!DOCTYPE html>
                     Match
                   </button>
                 ` : ''}
-                ${needsBandAssist ? `
+                ${false ? `
                   <button type="button" onclick="event.stopPropagation(); openBandAssistModal('${v.id}')" title="Which band is this?" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 transition">
                     Band?
                   </button>
@@ -2858,35 +2850,10 @@ HTML_PAGE = """<!DOCTYPE html>
         return;
       }
 
-      const needingBandList = pending.filter(v => isBandUnmatched(v));
-      const needingBandCount = needingBandList.length;
-      const firstNeeding = needingBandList[0];
       const needingSongList = pending.filter(v => isSongUnmatched(v));
       const needingSongCount = needingSongList.length;
 
       let headerBanner = '';
-      if (needingBandCount > 0 && firstNeeding) {
-        headerBanner += `
-          <div class="bg-gradient-to-r from-amber-500/20 via-amber-600/10 to-transparent border border-amber-500/40 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg shadow-amber-500/5 mb-3">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center flex-shrink-0">
-                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
-              </div>
-              <div>
-                <div class="font-bold text-sm text-white flex items-center gap-2">
-                  <span>Lineup Identification Required</span>
-                  <span class="px-2 py-0.5 rounded-full text-[10px] bg-amber-500 text-black font-mono font-bold tabular">${needingBandCount} Clip(s)</span>
-                </div>
-                <p class="text-xs text-zinc-300 mt-0.5">Concert is correlated, but the performing band must be selected from the show's roster.</p>
-              </div>
-            </div>
-            <button type="button" onclick="openBandAssistModal('${firstNeeding.id}')" class="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-bold text-xs shadow-md shadow-amber-500/25 flex items-center gap-1.5 transition flex-shrink-0 cursor-pointer">
-              <span>🎸 Open Band Selection Pop-up</span>
-              <span>→</span>
-            </button>
-          </div>
-        `;
-      }
       if (needingSongCount > 0) {
         headerBanner += `
           <div class="bg-card border border-border rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
@@ -2937,7 +2904,6 @@ HTML_PAGE = """<!DOCTYPE html>
         const date = c.event_date || (v.recorded_at_utc ? v.recorded_at_utc.substring(0, 10) : 'Unknown Date');
         const needsBandAssist = isBandUnmatched(v);
         const songUnmatched = isSongUnmatched(v);
-        const showBands = needsBandAssist ? getShowBands(v) : [];
         const isSuggested = ident.status === 'SUGGESTED';
         const needsVenueAssist = isVenueUnmatched(v);
         const needsConcertAssist = !v.concert;
@@ -2971,24 +2937,20 @@ HTML_PAGE = """<!DOCTYPE html>
                   <div class="text-left space-y-0.5">
                     <div class="flex items-center gap-2">
                       <span class="text-xs font-mono text-zinc-400">${v.filename}</span>
-                      ${needsBandAssist ? `
-                        <button type="button" onclick="openBandAssistModal('${v.id}')" class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500 hover:text-black transition">
-                          🎸 Select Band
-                        </button>
-                      ` : ''}
                       ${songUnmatched ? `
                         <button type="button" onclick="event.stopPropagation(); openSongAssistModal('${v.id}')" class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/40 hover:bg-rose-500 hover:text-white transition">
                           What song?
                         </button>
                       ` : ''}
                     </div>
-                    <button type="button" class="text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded p-0" onclick="openDrawer('${v.id}')">
-                      <h3 class="text-base font-bold text-zinc-100 flex items-center gap-2 mt-0.5">
+                    <h3 class="text-base font-bold text-zinc-100 flex items-center gap-2 mt-0.5">
+                      <button type="button" onclick="event.stopPropagation(); openBandAssistModal('${v.id}')" aria-label="Change artist" title="Change artist" class="group/artist inline-flex items-center gap-1.5 text-left rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
                         <span class="hover:text-brand-300 transition">${artist}</span>
-                        <span class="text-zinc-400 font-normal">—</span>
-                        <span class="text-brand-400 font-semibold">${song}</span>
-                      </h3>
-                    </button>
+                        <svg class="w-3.5 h-3.5 text-zinc-500 opacity-0 group-hover/artist:opacity-100 group-focus-visible/artist:opacity-100 transition" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                      </button>
+                      <span class="text-zinc-400 font-normal">—</span>
+                      <button type="button" onclick="openDrawer('${v.id}')" class="text-left text-brand-400 font-semibold rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">${song}</button>
+                    </h3>
                   </div>
                   <div class="flex items-center gap-2">
                     ${isSuggested ? `
@@ -3026,30 +2988,6 @@ HTML_PAGE = """<!DOCTYPE html>
                   </div>
                 </div>
 
-                ${needsBandAssist ? `
-                  <div class="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 space-y-2">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-bold text-amber-400 flex items-center gap-1.5">
-                        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
-                        Which band is this? (Concert Matched • Song Unconfirmed)
-                      </span>
-                      <button type="button" onclick="openBandAssistModal('${v.id}')" class="px-2.5 py-1 text-xs text-black font-bold bg-amber-400 hover:bg-amber-300 rounded-lg shadow-sm flex items-center gap-1 transition cursor-pointer">
-                        <span>🎸 Open Pop-up Selector</span>
-                        <span>→</span>
-                      </button>
-                    </div>
-                    <div class="flex flex-wrap gap-1.5 items-center">
-                      <span class="text-[11px] text-zinc-400 mr-1">Select lineup artist:</span>
-                      ${showBands.length > 0 ? showBands.map(b => `
-                        <button type="button" onclick="quickSetBand('${v.id}', '${b.replace(/'/g, "\\'")}')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-zinc-800 hover:bg-amber-500 hover:text-black text-zinc-200 border border-zinc-700 transition cursor-pointer">
-                          ${b}
-                        </button>
-                      `).join('') : `
-                        <button type="button" onclick="openBandAssistModal('${v.id}')" class="text-xs text-amber-400 underline">Enter opener / performer name</button>
-                      `}
-                    </div>
-                  </div>
-                ` : ''}
                 ${songUnmatched ? `
                   <div class="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                     <div>
@@ -3076,12 +3014,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 <button type="button" onclick="triggerSongMatching('${v.id}', this)" class="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1">
                   <span>↻ Re-run Song Match</span>
                 </button>
-                ${needsBandAssist ? `
-                  <button onclick="openBandAssistModal('${v.id}')" class="text-xs text-amber-300 hover:text-white font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 transition">
-                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
-                    <span>Which band is this? (Pop-up)</span>
-                  </button>
-                ` : needsVenueAssist ? `
+                ${needsVenueAssist ? `
                   <button onclick="openVenueAssistModal('${v.id}')" class="text-xs text-brand-400 hover:text-brand-300 font-semibold flex items-center gap-1">
                     <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                     <span>What venue is this?</span>
@@ -3229,6 +3162,7 @@ HTML_PAGE = """<!DOCTYPE html>
       const conf = ident.match_confidence ? Math.round(ident.match_confidence * 100) : 0;
 
       document.getElementById('drawer-artist-name').innerText = artist;
+      document.getElementById('drawer-artist-edit')?.classList.toggle('hidden', isPublished);
       document.getElementById('drawer-song-title').innerText = song;
       document.getElementById('drawer-confidence-pill').innerText = `${conf}% Match`;
       document.getElementById('drawer-confidence-text').innerText = `${conf}%`;
@@ -3250,31 +3184,6 @@ HTML_PAGE = """<!DOCTYPE html>
       const drawerThumb = document.getElementById('drawer-thumbnail');
       if (drawerThumb) {
         drawerThumb.src = `/api/video/${v.id}/thumbnail?t=${Date.now()}`;
-      }
-
-      // Lineup band assistance
-      const bandAssistSection = document.getElementById('drawer-band-assist-section');
-      const bandChips = document.getElementById('drawer-band-chips');
-      if (bandAssistSection && bandChips) {
-        if (!isPublished) {
-          bandAssistSection.classList.remove('hidden');
-          const bands = getShowBands(v);
-          const currentArtist = (ident.detected_artist || '').toLowerCase();
-          bandChips.innerHTML = bands.map(b => {
-            const isCurrent = (currentArtist === b.toLowerCase());
-            return `
-              <button type="button" onclick="quickSetBand('${v.id}', '${b.replace(/'/g, "\\'")}')" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
-                isCurrent
-                  ? 'bg-amber-500 text-black shadow-sm'
-                  : 'bg-zinc-800 hover:bg-amber-500/20 text-zinc-200 hover:text-amber-300 border border-zinc-700 hover:border-amber-500/40'
-              }">
-                ${b}${isCurrent ? ' ✓' : ''}
-              </button>
-            `;
-          }).join('');
-        } else {
-          bandAssistSection.classList.add('hidden');
-        }
       }
 
       // Pre-fill YouTube form
