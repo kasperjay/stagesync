@@ -708,7 +708,7 @@ HTML_PAGE = """<!DOCTYPE html>
         <!-- Video Still Frame -->
         <div class="relative rounded-2xl overflow-hidden border border-border bg-card-subtle group">
           <img id="drawer-thumbnail" src="" alt="Video Frame" class="w-full h-44 object-cover" />
-          <button type="button" onclick="openVenueAssistModal(activeSelectedVideo ? activeSelectedVideo.id : '')" class="absolute inset-0 bg-black/50 backdrop-blur-xs opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 text-white font-semibold text-xs transition duration-200">
+          <button type="button" id="drawer-thumbnail-venue-assist" onclick="openVenueAssistModal(activeSelectedVideo ? activeSelectedVideo.id : '')" class="hidden absolute inset-0 bg-black/50 backdrop-blur-xs opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 text-white font-semibold text-xs transition duration-200">
             <svg class="w-4 h-4 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
             <span>What venue is this? / Assist Search</span>
           </button>
@@ -2735,6 +2735,7 @@ HTML_PAGE = """<!DOCTYPE html>
         const songUnmatched = isSongUnmatched(v);
         const needsSongAssist = songUnmatched && Boolean(knownArtistForVideo(v));
         const isSuggested = ident.status === 'SUGGESTED';
+        const needsConcertAssist = !v.concert;
         const needsVenueAssist = !hasKnownVenue;
         const primaryAssist = needsBandAssist ? 'band' : needsSongAssist ? 'song' : needsVenueAssist ? 'venue' : 'drawer';
         const primaryAssistAction = primaryAssist === 'band'
@@ -2812,7 +2813,7 @@ HTML_PAGE = """<!DOCTYPE html>
                     Song?
                   </button>
                 ` : ''}
-                ${colKey === 'review' ? (isSuggested ? `
+                ${colKey === 'review' && needsConcertAssist ? (isSuggested ? `
                   <button type="button" onclick="event.stopPropagation(); openSetlistAssistModal('${v.id}')" title="Search exact concert / tour on Setlist.fm" aria-label="Search exact concert / tour on Setlist.fm" class="px-2 py-1 text-[10px] font-semibold rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 transition">
                     Find exact concert
                   </button>
@@ -2938,13 +2939,15 @@ HTML_PAGE = """<!DOCTYPE html>
         const songUnmatched = isSongUnmatched(v);
         const showBands = needsBandAssist ? getShowBands(v) : [];
         const isSuggested = ident.status === 'SUGGESTED';
+        const needsVenueAssist = isVenueUnmatched(v);
+        const needsConcertAssist = !v.concert;
 
         return `
           <div class="bg-card border border-border rounded-2xl p-5 hover:border-zinc-700 transition space-y-4 shadow-sm">
             <div class="flex flex-col md:flex-row gap-4">
               
               <!-- Video Still Preview -->
-              <div class="w-full md:w-44 h-28 rounded-xl overflow-hidden border border-border bg-black/40 flex-shrink-0 relative group cursor-pointer" onclick="${needsBandAssist ? `openBandAssistModal('${v.id}')` : songUnmatched && knownArtistForVideo(v) ? `openSongAssistModal('${v.id}')` : `openVenueAssistModal('${v.id}')`}">
+              <div class="w-full md:w-44 h-28 rounded-xl overflow-hidden border border-border bg-black/40 flex-shrink-0 relative group cursor-pointer" onclick="${needsBandAssist ? `openBandAssistModal('${v.id}')` : songUnmatched && knownArtistForVideo(v) ? `openSongAssistModal('${v.id}')` : needsVenueAssist ? `openVenueAssistModal('${v.id}')` : `openDrawer('${v.id}')`}">
                 <img src="/api/video/${v.id}/thumbnail" alt="" class="w-full h-full object-cover">
                 <div class="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-1 text-[11px] text-white font-semibold transition p-2 text-center">
                   ${needsBandAssist ? `
@@ -2955,10 +2958,10 @@ HTML_PAGE = """<!DOCTYPE html>
                     <svg class="w-4 h-4 text-rose-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 3-.895-3-2-3-.895-3-2zM9 10l12-3" /></svg>
                     <span class="text-rose-300 font-bold">What song is this?</span>
                     <span class="text-[9px] text-zinc-300 font-normal">Click to choose</span>
-                  ` : `
+                  ` : needsVenueAssist ? `
                     <svg class="w-4 h-4 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                     <span>What venue is this?</span>
-                  `}
+                  ` : ''}
                 </div>
               </div>
 
@@ -3078,16 +3081,16 @@ HTML_PAGE = """<!DOCTYPE html>
                     <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
                     <span>Which band is this? (Pop-up)</span>
                   </button>
-                ` : `
+                ` : needsVenueAssist ? `
                   <button onclick="openVenueAssistModal('${v.id}')" class="text-xs text-brand-400 hover:text-brand-300 font-semibold flex items-center gap-1">
                     <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                     <span>What venue is this?</span>
                   </button>
-                `}
-                <button type="button" onclick="event.stopPropagation(); openSetlistAssistModal('${v.id}')" class="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1">
+                ` : ''}
+                ${needsConcertAssist ? `<button type="button" onclick="event.stopPropagation(); openSetlistAssistModal('${v.id}')" class="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1">
                   <span>Search exact concert / tour on Setlist.fm</span>
                   <span>→</span>
-                </button>
+                </button>` : ''}
               </div>
               <div class="flex items-center gap-2">
                 <button onclick="rejectVideo('${v.id}')" class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-card-subtle hover:bg-rose-950/40 hover:text-rose-300 hover:border-rose-800 border border-border transition">
@@ -3232,6 +3235,7 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('drawer-confidence-bar').style.width = `${conf}%`;
 
       // Venue / Concert
+      document.getElementById('drawer-thumbnail-venue-assist')?.classList.toggle('hidden', !isVenueUnmatched(v));
       document.getElementById('drawer-venue-name').innerText = venue.name || 'Unknown Venue';
       document.getElementById('drawer-venue-city').innerText = `${venue.city || ''}, ${venue.country || ''}`;
       document.getElementById('drawer-concert-date').innerText = c.event_date || (v.recorded_at_utc ? v.recorded_at_utc.substring(0, 10) : '—');
