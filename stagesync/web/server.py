@@ -135,7 +135,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>StageSync | Task & Project Management Dashboard</title>
+  <title>StageSync | Concert Archive</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -151,22 +151,22 @@ HTML_PAGE = """<!DOCTYPE html>
           },
           colors: {
             brand: {
-              50: '#eef2ff',
-              100: '#e0e7ff',
-              200: '#c7d2fe',
-              500: '#6366f1',
-              600: '#4f46e5',
-              700: '#4338ca'
+              50: '#e3fffc',
+              100: '#bbfff6',
+              200: '#7df5ed',
+              500: '#00d9d0',
+              600: '#009f9d',
+              700: '#006b70'
             },
-            canvas: '#090d16',
+            canvas: '#05090d',
             card: {
-              DEFAULT: '#111726',
-              hover: '#161f33',
-              subtle: '#0d1320'
+              DEFAULT: '#0b141a',
+              hover: '#10232a',
+              subtle: '#080f14'
             },
             border: {
-              DEFAULT: '#1e293b',
-              subtle: '#172033'
+              DEFAULT: '#1b343b',
+              subtle: '#14282e'
             }
           }
         }
@@ -175,6 +175,8 @@ HTML_PAGE = """<!DOCTYPE html>
   </script>
   <style>
     body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-image: radial-gradient(ellipse at 78% 0%, rgba(0, 126, 137, .10), transparent 38%); }
+    :focus-visible { outline: 2px solid #00e5dd; outline-offset: 3px; }
     .tabular { font-variant-numeric: tabular-nums; }
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: #090d16; }
@@ -187,7 +189,7 @@ HTML_PAGE = """<!DOCTYPE html>
       transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
     }
     input[type="range"]#song-assist-progress {
-      accent-color: #6366f1;
+      accent-color: #00d9d0;
     }
     input[type="range"]#song-assist-progress::-webkit-slider-thumb {
       cursor: pointer;
@@ -205,7 +207,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <!-- Workspace Brand Header -->
     <div class="h-16 border-b border-border px-5 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-brand-600 via-indigo-500 to-blue-500 flex items-center justify-center font-bold text-white shadow-md shadow-brand-500/20">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-teal-600 via-cyan-500 to-blue-600 flex items-center justify-center font-bold text-white shadow-md shadow-brand-500/20">
           <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
           </svg>
@@ -215,7 +217,7 @@ HTML_PAGE = """<!DOCTYPE html>
             StageSync
             <span class="text-[10px] font-mono px-1.5 py-0.2 bg-brand-500/10 text-brand-400 border border-brand-500/20 rounded">PRO</span>
           </div>
-          <div class="text-[11px] text-zinc-400">Task & Video Vault</div>
+          <div class="text-[11px] text-zinc-400">Concert Archive</div>
         </div>
       </div>
       <button onclick="toggleSidebar()" class="lg:hidden text-zinc-400 hover:text-white p-1">
@@ -239,12 +241,12 @@ HTML_PAGE = """<!DOCTYPE html>
     <!-- Navigation Menu Items -->
     <div class="flex-1 px-3 py-2 space-y-6 overflow-y-auto">
       <div>
-        <div class="px-3 pb-2 text-[10px] font-semibold text-zinc-400 tracking-wider uppercase">Project Views</div>
+        <div class="px-3 pb-2 text-[10px] font-semibold text-zinc-400 tracking-wider uppercase">Your Library</div>
         <nav class="space-y-1">
           <button onclick="setTab('board')" id="nav-btn-board" class="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition text-zinc-300 hover:text-white hover:bg-zinc-800/50">
             <div class="flex items-center gap-2.5">
               <svg class="w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" /></svg>
-              <span>Kanban Board</span>
+              <span>Pipeline Board</span>
             </div>
             <span id="nav-count-board" class="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-zinc-800 text-zinc-400">0</span>
           </button>
@@ -268,17 +270,17 @@ HTML_PAGE = """<!DOCTYPE html>
           <button onclick="setTab('overview')" id="nav-btn-overview" class="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition text-zinc-300 hover:text-white hover:bg-zinc-800/50">
             <div class="flex items-center gap-2.5">
               <svg class="w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
-              <span>Overview & KPIs</span>
+              <span>Overview</span>
             </div>
           </button>
         </nav>
       </div>
 
       <div>
-        <div class="px-3 pb-2 text-[10px] font-semibold text-zinc-400 tracking-wider uppercase">Pipeline Sagas</div>
+        <div class="px-3 pb-2 text-[10px] font-semibold text-zinc-400 tracking-wider uppercase">Pipeline</div>
         <div class="space-y-1">
           <button onclick="openScanModal()" class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800/50 transition">
-            <svg class="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" /></svg>
+            <svg class="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" /></svg>
             <span>Scan Discovery</span>
           </button>
           <button onclick="triggerAction('process')" id="sidebar-btn-process" class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800/50 transition">
@@ -308,7 +310,7 @@ HTML_PAGE = """<!DOCTYPE html>
           <span id="sidebar-quota-text" class="text-zinc-200 font-mono font-semibold tabular">0 / 5</span>
         </div>
         <div class="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-          <div id="sidebar-quota-bar" class="bg-gradient-to-r from-blue-500 to-indigo-500 h-1.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+          <div id="sidebar-quota-bar" class="bg-gradient-to-r from-cyan-500 to-teal-400 h-1.5 rounded-full transition-all duration-300" style="width: 0%"></div>
         </div>
         <div class="pt-1 flex items-center justify-between text-[10px] text-zinc-400 border-t border-border/40">
           <span class="flex items-center gap-1.5">
@@ -339,7 +341,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <span>/</span>
             <span>StageSync</span>
             <span>/</span>
-            <span id="breadcrumb-active-view" class="text-zinc-200 font-medium">Kanban Board</span>
+            <span id="breadcrumb-active-view" class="text-zinc-200 font-medium">Pipeline Board</span>
           </div>
           <h1 id="page-title" class="text-sm sm:text-base font-bold text-white tracking-tight flex items-center gap-2">
             Task Management Pipeline
@@ -367,7 +369,7 @@ HTML_PAGE = """<!DOCTYPE html>
         </button>
 
         <button onclick="openScanModal()" class="px-3 py-1.5 text-xs font-semibold rounded-xl bg-card border border-border hover:bg-card-hover text-zinc-200 shadow-sm transition flex items-center gap-1.5">
-          <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+          <svg class="w-3.5 h-3.5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
           <span>Scan Media</span>
         </button>
 
@@ -462,7 +464,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 <span class="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
                 <span class="font-bold text-xs uppercase tracking-wider text-indigo-300">Approved & Queued</span>
               </div>
-              <span id="board-count-approved" class="text-xs font-mono px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 tabular font-semibold">0</span>
+              <span id="board-count-approved" class="text-xs font-mono px-2 py-0.5 rounded-full bg-indigo-500/10 text-cyan-400 border border-indigo-500/20 tabular font-semibold">0</span>
             </div>
             <div id="board-col-approved" class="p-3 space-y-3 overflow-y-auto flex-1 min-h-[140px]">
               <!-- Cards injected via JS -->
@@ -555,13 +557,13 @@ HTML_PAGE = """<!DOCTYPE html>
           </div>
 
           <div class="bg-card border border-border rounded-2xl p-4 sm:p-5 relative overflow-hidden group hover:border-indigo-500/40 transition">
-            <div class="flex items-center justify-between text-indigo-400 text-xs font-medium">
+            <div class="flex items-center justify-between text-cyan-400 text-xs font-medium">
               <span>Approved & Queued</span>
-              <span class="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+              <span class="p-1.5 rounded-lg bg-indigo-500/10 text-cyan-400 border border-indigo-500/20">
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
               </span>
             </div>
-            <div class="text-3xl font-extrabold tabular text-indigo-400 mt-2" id="stat-approved">0</div>
+            <div class="text-3xl font-extrabold tabular text-cyan-400 mt-2" id="stat-approved">0</div>
             <div class="text-[11px] text-zinc-400 mt-1">Ready for YouTube pipeline</div>
           </div>
 
@@ -651,7 +653,7 @@ HTML_PAGE = """<!DOCTYPE html>
           </div>
           <div class="flex items-center gap-2">
             <button onclick="openScanModal()" class="px-3.5 py-2 text-xs font-semibold rounded-xl bg-card-subtle hover:bg-zinc-800 text-zinc-200 border border-border transition flex items-center gap-2">
-              <svg class="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" /></svg>
+              <svg class="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" /></svg>
               <span>Scan Media Sources</span>
             </button>
             <button onclick="triggerAction('process')" id="btn-process-action" class="px-3.5 py-2 text-xs font-semibold rounded-xl bg-card-subtle hover:bg-zinc-800 text-zinc-200 border border-border transition flex items-center gap-2">
@@ -717,7 +719,7 @@ HTML_PAGE = """<!DOCTYPE html>
         <!-- AI Match Hero Card -->
         <div class="bg-gradient-to-br from-indigo-950/40 via-card-subtle to-canvas border border-indigo-900/40 rounded-2xl p-4 space-y-3">
           <div class="flex items-center justify-between">
-            <span class="text-[10px] font-bold tracking-wider uppercase text-indigo-400 flex items-center gap-1.5">
+            <span class="text-[10px] font-bold tracking-wider uppercase text-cyan-400 flex items-center gap-1.5">
               <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
               Identified Track & Artist
             </span>
@@ -861,7 +863,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="bg-card border border-border rounded-2xl p-6 max-w-lg w-full space-y-4 shadow-2xl">
       <div class="flex items-center justify-between border-b border-border pb-3">
         <div class="flex items-center gap-3">
-          <div class="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+          <div class="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-cyan-400">
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" /></svg>
           </div>
           <div>
@@ -2592,10 +2594,10 @@ HTML_PAGE = """<!DOCTYPE html>
       }
       const views = ['board', 'review', 'catalog', 'overview'];
       const viewNames = {
-        'board': 'Kanban Board',
+        'board': 'Pipeline Board',
         'review': 'Review Queue',
         'catalog': 'Video Catalog',
-        'overview': 'Overview & KPIs'
+        'overview': 'Overview'
       };
 
       views.forEach(v => {
@@ -3079,7 +3081,7 @@ HTML_PAGE = """<!DOCTYPE html>
         const conf = ident.match_confidence ? Math.round(ident.match_confidence * 100) + '%' : '—';
 
         let badgeClass = 'bg-zinc-800 text-zinc-400 border-zinc-700';
-        if (v.processing_status === 'APPROVED') badgeClass = 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30';
+        if (v.processing_status === 'APPROVED') badgeClass = 'bg-indigo-500/10 text-cyan-400 border-indigo-500/30';
         if (v.processing_status === 'PUBLISHED') badgeClass = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30';
         if (v.processing_status === 'REJECTED') badgeClass = 'bg-rose-500/10 text-rose-400 border-rose-500/30';
         if (v.processing_status === 'PENDING_REVIEW') badgeClass = 'bg-amber-500/10 text-amber-400 border-amber-500/30';
@@ -3136,7 +3138,7 @@ HTML_PAGE = """<!DOCTYPE html>
       const badge = document.getElementById('drawer-status-badge');
       badge.innerText = v.processing_status;
       badge.className = `px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
-        v.processing_status === 'APPROVED' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/30' :
+        v.processing_status === 'APPROVED' ? 'bg-indigo-500/10 text-cyan-400 border border-indigo-500/30' :
         v.processing_status === 'PUBLISHED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' :
         v.processing_status === 'REJECTED' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30' :
         'bg-amber-500/10 text-amber-400 border border-amber-500/30'
@@ -3679,7 +3681,7 @@ HTML_PAGE = """<!DOCTYPE html>
         resultsBox.innerHTML = venues.map((ven, idx) => {
           const sourceBadges = (ven.sources || []).map(s => {
             if (s === 'local') return `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">DB</span>`;
-            if (s === 'setlist_fm') return `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">Setlist.fm</span>`;
+            if (s === 'setlist_fm') return `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-indigo-500/10 text-cyan-400 border border-indigo-500/20">Setlist.fm</span>`;
             return `<span class="px-1.5 py-0.5 rounded text-[9px] font-mono bg-sky-500/10 text-sky-400 border border-sky-500/20">OSM</span>`;
           }).join(' ');
 
