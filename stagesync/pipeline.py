@@ -1643,10 +1643,7 @@ class PipelineCoordinator:
         if not video:
             raise ValueError(f"Video {video_id} not found.")
 
-        try:
-            matched = self.setlist_client.refresh_show_lineup(matched)
-        except Exception as exc:
-            logger.warning("Could not refresh selected show's lineup for %s: %s", video_id, exc)
+        matched = self.setlist_client.refresh_show_lineup(matched)
 
         venue = self.db.get_venue_by_setlist_id(matched.venue_id) if matched.venue_id else None
         if not venue:

@@ -342,6 +342,15 @@ class TestReidentifyVideoWithVenue(unittest.TestCase):
             },
         )
         self.coord.setlist_client.refresh_show_lineup = MagicMock(
+            side_effect=ValueError("Lineup unavailable")
+        )
+        with self.assertRaisesRegex(ValueError, "Lineup unavailable"):
+            self.coord.attach_setlist_concert(video.id, matched)
+        unchanged = self.db.get_identification_by_video_id(video.id)
+        self.assertEqual(unchanged.detected_artist, "Gideon")
+        self.assertIsNone(unchanged.concert_id)
+
+        self.coord.setlist_client.refresh_show_lineup = MagicMock(
             return_value=matched.model_copy(update={"lineup_artists": ["Attila", "Gideon", "Ten56", "Until I Wake"]})
         )
 

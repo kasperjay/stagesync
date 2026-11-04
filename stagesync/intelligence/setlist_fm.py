@@ -378,7 +378,9 @@ class SetlistFmClient:
         lineup: List[Dict[str, Any]] = []
         for page in range(1, 4):
             data = self._fetch_setlists_raw({**params, "p": str(page)})
-            page_items = data.get("setlist", []) if data else []
+            if data is None:
+                raise ValueError("Could not load the show lineup from Setlist.fm. Please retry; the show has not been changed.")
+            page_items = data.get("setlist", [])
             if not page_items:
                 break
             lineup.extend(page_items)

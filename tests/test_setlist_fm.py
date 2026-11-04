@@ -179,6 +179,13 @@ class TestSetlistFm(unittest.TestCase):
             "p": "1",
         })
 
+    def test_lineup_failure_does_not_become_single_artist_show(self):
+        selected = SAMPLE_SETLIST_FM_PAYLOAD["setlist"][0]
+        matched = self.client.parse_setlist_payload(selected, "2024-08-15")
+        with patch.object(self.client, "_fetch_setlists_raw", return_value=None):
+            with self.assertRaisesRegex(ValueError, "Could not load the show lineup"):
+                self.client.refresh_show_lineup(matched)
+
     def test_refresh_show_lineup_uses_unfiltered_show_records(self) -> None:
         selected = {
             "id": "event-1",
