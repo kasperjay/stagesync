@@ -475,3 +475,7 @@ catalog; local originals are retained. These records are currently file-based, n
 web review queue. Rescanning retries screening. Existing catalog rows are not cleaned up.
 Missing credentials, malformed responses, and media/API errors never admit a new row.
 Real-world precision still requires evaluation against labeled concert/non-concert clips.
+
+The production dashboard is loaded from `stagesync/web/dashboard.html`. The unfinished
+redesign remains in `stagesync/web/index.html`; it is not served because it lacks
+rejection filtering, manual song matching, and audio seeking supported by production.

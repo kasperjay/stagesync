@@ -1,0 +1,32 @@
+[
+  {
+    "filename": "IMG_6177.MOV",
+    "result": {
+      "decision": "accept",
+      "confidence": 1.0,
+      "visual_live_performance": true,
+      "audio_live_performance": true,
+      "reason": "The video samples consistently depict a band performing live on a stage with professional lighting and an active audience. The audio features live music with vocals, instruments, and crowd interaction, confirming an authentic concert or festival environment."
+    }
+  },
+  {
+    "filename": "IMG_6166.MOV",
+    "result": {
+      "decision": "accept",
+      "confidence": 1.0,
+      "visual_live_performance": true,
+      "audio_live_performance": true,
+      "reason": "The video clearly depicts a live musical performance at a concert. A band, including a vocalist in a cowboy hat, a drummer, and a guitarist, is performing on a stage with professional lighting. An engaged audience is visible in front of the stage. The audio features live music with vocals and crowd sounds, consistent with a concert setting."
+    }
+  },
+  {
+    "filename": "2016-12-19_13-44-37_232.MP4",
+    "result": {
+      "decision": "reject",
+      "confidence": 1.0,
+      "visual_live_performance": false,
+      "audio_live_performance": false,
+      "reason": "The video shows a person taking a selfie with personal belongings in the background, not a live musical performance. There is no music or performance audio present."
+    }
+  }
+]

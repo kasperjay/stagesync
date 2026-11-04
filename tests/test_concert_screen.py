@@ -12,3 +12,7 @@ class TestConcertScreen(unittest.TestCase):
                        {"audio_live_performance": False}, {"confidence": float("nan")},
                        {"confidence": "0.99"}, {"decision": "unknown"}):
             self.assertEqual(validate_result({**good, **change})["decision"], "review")
+
+    def test_non_object_responses_require_review(self):
+        for result in ([], [{"decision": "accept"}], None, "accept"):
+            self.assertEqual(validate_result(result)["decision"], "review")

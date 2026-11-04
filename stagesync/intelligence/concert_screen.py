@@ -31,7 +31,7 @@ def screen_concert(path: Path) -> dict:
             "Daylight, small venues, long recordings and electronic performances are valid. "
             "Music alone is insufficient. Exclude rehearsals, music videos, screen recordings, "
             "TV playback, parties with background music and unrelated personal footage. "
-            "If evidence is incomplete or conflicting choose review. Return JSON with decision "
+            "If evidence is incomplete or conflicting choose review. Return one JSON object for the entire recording, not an array or per-sample results, with decision "
             "(accept/reject/review), confidence (0 to 1), visual_live_performance (boolean), "
             "audio_live_performance (boolean), and reason (string)."
         )}]
@@ -59,6 +59,8 @@ def screen_concert(path: Path) -> dict:
 
 
 def validate_result(result: dict) -> dict:
+    if not isinstance(result, dict):
+        return {"decision": "review", "reason": "Invalid classifier response"}
     decision = result.get("decision")
     confidence = result.get("confidence")
     if (decision not in ("accept", "reject", "review")
