@@ -25,6 +25,7 @@ class FormattedYouTubeMetadata(BaseModel):
     description: str
     tags: List[str] = Field(default_factory=list)
     category_id: str = "10"  # Music
+    publish_at: Optional[str] = None
     recording_date: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
@@ -58,6 +59,10 @@ class MetadataGenerator:
         concert: Optional[Concert],
     ) -> str:
         """Resolve the artist without allowing a multi-artist placeholder to win."""
+        if identification and identification.status in ("USER_ASSISTED_BAND", "MANUAL_OVERRIDE"):
+            artist = self._usable_artist(identification.detected_artist)
+            if artist:
+                return artist
         song_title = identification.detected_song_title if identification else None
         if concert and song_title:
             lineup_setlists = concert.setlist_data.get("_stagesync_lineup_setlists", [])

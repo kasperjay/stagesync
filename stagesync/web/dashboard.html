@@ -724,7 +724,7 @@
           Delete Permanently
         </button>
         <button onclick="handleDrawerApprove()" id="drawer-btn-approve" class="px-5 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition">
-          Approve & Queue Upload
+          Review & Approve
         </button>
       </div>
     </aside>
@@ -1868,7 +1868,10 @@
       banner.innerHTML = htmlContent;
     }
 
+    let songOptionsGeneration = 0;
     async function loadSongOptions(query, isManualTrigger = false) {
+      const requestGeneration = ++songOptionsGeneration;
+      const requestVideoId = activeSongAssistVideoId;
       if (!activeSongAssistVideoId) return;
       const container = document.getElementById('song-options-container');
       const searchBtn = document.getElementById('btn-song-search');
@@ -1909,6 +1912,7 @@
           throw new Error(`Unexpected response (HTTP ${res.status})`);
         }
 
+        if (requestGeneration !== songOptionsGeneration || activeSongAssistVideoId !== requestVideoId) return;
         const sourceLabel = data.source === 'setlist'
           ? 'Show setlist'
           : data.source === 'musicbrainz'
@@ -2911,7 +2915,7 @@
                   </button>
                 ` : `
                   <button onclick="quickApprove('${v.id}')" class="px-4 py-1.5 text-xs font-semibold rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-md shadow-brand-500/20 transition">
-                    Approve & Queue Upload
+                    Review & Approve
                   </button>
                 `}
               </div>
@@ -3029,7 +3033,7 @@
       approveButton?.classList.toggle('hidden', isRejected || isPublished);
       if (approveButton) {
         approveButton.onclick = isSuggested ? () => confirmSuggestedMatch(v.id) : handleDrawerApprove;
-        approveButton.innerText = isSuggested ? 'Review Playback & Confirm Match' : 'Approve & Queue Upload';
+        approveButton.innerText = isSuggested ? 'Review Playback & Confirm Match' : 'Review & Approve';
       }
 
       // AI Match
@@ -3159,7 +3163,7 @@
         const data = await parseApiJson(res);
         if (!res.ok || !data.success) throw new Error(data.error || `Request failed (HTTP ${res.status})`);
         await loadData();
-        showToast({ type: 'success', title: 'Suggestion confirmed', message: 'Metadata generated and the video is queued for upload.' });
+        showToast({ type: 'success', title: 'Suggestion confirmed', message: 'Song confirmed. Complete the ordered identity review before publishing.' });
         return true;
       } catch (err) {
         showToast({ type: 'error', title: 'Could not confirm suggestion', message: err?.message || String(err) });
@@ -3193,7 +3197,7 @@
         showToast({
           type: 'success',
           title: 'Video Approved',
-          message: 'Queued for YouTube upload. Click Publish to upload approved clips.',
+          message: 'Identity approved. Open the publishing editor to prepare an upload.',
           durationMs: 5000
         });
         return true;
@@ -4169,5 +4173,6 @@
     setTab('board');
     setInterval(loadData, 10000);
   </script>
+<script src="/static/workflow.js"></script>
 </body>
 </html>

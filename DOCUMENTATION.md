@@ -32,13 +32,13 @@ flowchart TD
     end
 
     subgraph State_Store ["Persistence & State Layer"]
-        DB[(PostgreSQL / SQLite WAL Engine)]
+        DB[(SQLite WAL Engine)]
         AuditLog[Pipeline Run Step Auditor]
     end
 
     subgraph User_Touchpoint ["Human-In-The-Loop Interaction"]
         CLI[Interactive Terminal UI / Rich CLI]
-        WebUI[Next.js / Tailwind Review Dashboard]
+        WebUI[aiohttp / HTML Review Dashboard]
     end
 
     subgraph Publisher ["Distribution Worker"]
@@ -73,7 +73,7 @@ flowchart TD
     CLI -->|15. Approve / Edit| DB
     WebUI -->|15. Approve / Edit| DB
     
-    DB -->|16. Pick Up APPROVED| MetadataFormatter
+    DB -->|16. Explicitly queued publication jobs| MetadataFormatter
     MetadataFormatter --> ResumableUpload
     ResumableUpload -->|17. Stream 8MB Chunks| YT
     YT -->|18. Return Video ID & URL| DB
@@ -98,7 +98,7 @@ Google deprecated the `photoslibrary.readonly` scope on March 31, 2025. This mea
 
 When Shazam and setlist-constrained Gemini matching do not identify a song, StageSync may use lyrics detected by Gemini to search the performing artist's MusicBrainz discography and ask Gemini to map the lyric fragment to one of those known recording titles. This result is persisted with `fingerprint_service=lyrics_discography` and `status=SUGGESTED`.
 
-Lyrics-based results are never auto-approved. The video remains `PENDING_REVIEW`, no YouTube metadata or upload draft is generated, and the dashboard requires playback review followed by an explicit confirmation. Confirmation promotes the identification to `CONFIRMED`, generates metadata, and queues the upload through the normal approval path. Rejecting the suggestion leaves the video unidentified and does not create publication metadata.
+Lyrics-based results are never auto-approved. The video remains `PENDING_REVIEW`, no YouTube metadata or upload draft is generated, and the dashboard requires playback review followed by an explicit confirmation. Confirmation promotes the identification to `CONFIRMED`, verifies identity and prepares an editable draft; publication requires a separate explicit queue action. Rejecting the suggestion leaves the video unidentified and does not create publication metadata.
 
 ---
 
@@ -117,7 +117,7 @@ sequenceDiagram
     participant SFM as Setlist.fm API
     participant SHZ as Shazamio Service
     participant GEM as Gemini 2.5 Flash Audio
-    participant DB as Local Database (SQLite/Postgres)
+    participant DB as Local Database (SQLite)
     participant UI as CLI / Web Reviewer
     participant YT as YouTube Data API v3
 
@@ -164,7 +164,8 @@ sequenceDiagram
     User->>UI: Confirm [Approve]
     UI->>DB: UPDATE videos SET status='APPROVED'
 
-    Worker->>DB: SELECT * FROM videos WHERE processing_status='APPROVED'
+    User->>UI: Edit publishing draft and explicitly queue destinations
+    Worker->>DB: Claim revision-valid QUEUED publication jobs
     Worker->>YT: POST /upload/youtube/v3/videos?uploadType=resumable (Title, Description, Tags)
     YT-->>Worker: Resumable URI
     loop Chunked Upload (8MB per chunk)
@@ -172,7 +173,7 @@ sequenceDiagram
         YT-->>Worker: 308 Resume Incomplete / 200 OK
     end
     YT-->>Worker: YouTube Video ID (e.g., "dQw4w9WgXcQ")
-    Worker->>DB: INSERT into youtube_uploads & UPDATE videos status='PUBLISHED'
+    Worker->>DB: Persist publication job result and public/private/scheduled state
     Worker-->>User: Notification: "Published to https://youtu.be/dQw4w9WgXcQ"
 ```
 
@@ -184,7 +185,7 @@ The project is structured as a high-cohesion, low-coupling modular workspace loc
 
 ```
 /home/workspace/stagesync/
-├── pyproject.toml              # UV / Poetry dependencies (FastAPI, Typer, Shazamio, google-api-python-client)
+├── pyproject.toml              # Setuptools package and dependency metadata
 ├── README.md                   # Quickstart documentation
 ├── .env.example                # Canonical environment variable templates
 │
@@ -200,7 +201,7 @@ The project is structured as a high-cohesion, low-coupling modular workspace loc
 │   │
 │   ├── database/               # Relational persistence layer
 │   │   ├── connection.py       # Engine & session management (SQLite / PostgreSQL)
-│   │   ├── models.py           # SQLModel / SQLAlchemy 2.0 ORM definitions
+│   │   ├── models.py           # Pydantic domain models
 │   │   └── migrations/         # Alembic migration revisions
 │   │
 │   ├── ingestion/              # Ingestion & container extraction
@@ -215,14 +216,14 @@ The project is structured as a high-cohesion, low-coupling modular workspace loc
 │   │   └── ai_audio_judge.py   # Gemini 2.5 Flash setlist-constrained analyzer
 │   │
 │   ├── publisher/              # YouTube distribution
-│   │   ├── youtube_client.py   # YouTube Data API v3 OAuth & client
+│   │   ├── youtube_auth.py     # YouTube Data API v3 OAuth tokens
 │   │   ├── resumable_upload.py # Resumable 8MB chunked streaming uploader
 │   │   └── metadata_gen.py     # Title, description, tags, and chapter formatter
 │   │
-│   └── web/                    # FastAPI backend for Web Dashboard
-│       ├── app.py              # FastAPI application server
-│       ├── routes/             # REST endpoints (/videos, /pipeline, /status)
-│       └── static/             # Built UI distribution or minimal dashboard
+│   └── web/                    # aiohttp backend for Web Dashboard
+│       ├── server.py           # aiohttp application server
+│       ├── workflow.py         # Ordered approval and publication API routes
+│       └── dashboard.html      # Production HTML dashboard
 │
 └── tests/                      # Pytest verification suite
     ├── unit/                   # Unit tests for metadata parsing & formatting
@@ -241,7 +242,7 @@ which ffmpeg ffprobe python3 sqlite3
 ```
 Install the project dependencies using `uv` or `pip`:
 ```bash
-pip install typer rich requests google-auth google-auth-oauthlib google-api-python-client shazamio pydantic-settings sqlmodel alembic timezonefinder
+pip install -r requirements.txt
 ```
 
 ### 4.2 Credentials Configuration (`.env`)
@@ -266,7 +267,7 @@ GEMINI_API_KEY=your_gemini_api_key
 
 # Pipeline Runtime Policy
 STAGESYNC_DEFAULT_PRIVACY=unlisted     # private | unlisted | public
-STAGESYNC_AUTO_APPROVE_THRESHOLD=0.92  # Confidence required to bypass manual review
+STAGESYNC_AUTO_APPROVE_THRESHOLD=0.92  # Legacy setting; does not grant publication consent
 STAGESYNC_MAX_DAILY_UPLOADS=5          # YouTube API quota preservation guardrail
 ```
 
@@ -349,17 +350,17 @@ TARGET YOUTUBE METADATA:
   Title:      King Gizzard & The Lizard Wizard - Dragon (Live at Red Rocks - Aug 15, 2024)
   Privacy:    unlisted
 --------------------------------------------------------------------------------
-[A] Approve & Queue Upload   [E] Edit Metadata   [P] Change Privacy   [R] Reject   [S] Skip
+[A] Approve Identity   [E] Edit Metadata   [P] Change Privacy   [R] Reject   [S] Skip
 Selection: _
 ```
 
 #### 4. Resumable Upload Dispatcher
 ```bash
-# Upload all approved videos (respecting daily quota limit)
+# Dispatch explicitly queued publication jobs (respecting daily quota limit)
 stagesync upload
 
-# Force upload with public privacy override
-stagesync upload --limit 3 --privacy public
+# Dispatch at most three queued publication jobs
+stagesync upload --limit 3
 ```
 
 ---
@@ -409,56 +410,33 @@ Within `stagesync review`:
 
 ---
 
-## 8. Swarm Multi-Agent Execution Roadmap
+## Approval and publication contract
 
-To construct StageSync with zero regression and maximum engineering speed, the Swarm Director delegates tasks across specialized agents:
+`stagesync/workflow.py` persists ordered Venue → Show → Artist → Song confirmations
+and a revision of the underlying identity. Approval requires all four confirmations;
+an upstream edit invalidates affected confirmations and blocks stale queued work.
+Manual artist selections retain precedence over recognition candidates. Exact setlist
+lookups reject other artists, dates and venues, including same-city alternatives.
+Manual concert search still returns selectable candidates; results are not confirmations.
 
-```mermaid
-flowchart TD
-    Architect[Swarm Architect - System Topology & PRD/ERD]
-    
-    subgraph Implementation_Phase ["Subagent Fan-Out Execution"]
-        Backend[fullstack-craftsman: Ingestion & Pipeline Core]
-        Intelligence[fullstack-craftsman: Setlist & Audio AI Engine]
-        PublisherAgent[fullstack-craftsman: YouTube Resumable & Review CLI]
-    end
+Approval creates no dispatchable work. Publishing drafts are independently editable and
+persist title, description, tags, privacy, frame selection, release time and channel IDs.
+Identity changes preserve edited publication text and mark it for review. Regeneration
+requires an explicit action. Saved defaults apply to new drafts rather than silently
+rewriting existing drafts.
 
-    subgraph Quality_Gate ["Quality Guardian & Hardener"]
-        Tester[quality-guardian: TDD Debugger & Mock Test Suites]
-        Auditor[quality-guardian: Anti-Slop & Security Linter]
-    end
+Explicit enqueue validates approved revision, draft and connected destinations. Jobs
+are unique per clip/channel and claimed atomically. CLI, web and daemon use the same
+dispatch contract. Legacy queued records are retained as history but cannot bypass this
+contract. Channel lookup uses authenticated YouTube identity and isolated token files.
+A completed upload keeps its YouTube ID even when its thumbnail fails; thumbnail retry
+must not upload the video again. Scheduled release requests require a future,
+timezone-aware time and private privacy; display uses America/Chicago and persistence UTC.
 
-    Architect --> Backend
-    Architect --> Intelligence
-    Architect --> PublisherAgent
-    
-    Backend --> Tester
-    Intelligence --> Tester
-    PublisherAgent --> Tester
-    
-    Tester --> Auditor
-    Auditor --> ProductionReady[Production Ready CLI & Pipeline]
-```
-
-### Delegation Task Slices:
-1. **Subagent `fullstack-craftsman` (Core Engine & Ingestion)**:
-   - Scaffold project structure in `/home/workspace/stagesync/`.
-   - Implement `database/models.py` and `database/connection.py` using SQLModel / SQLite WAL.
-   - Implement `ingestion/google_photos.py` using Google Photos API + credentials at `~/.config/google-photos/credentials.json`.
-   - Implement `ingestion/ffmpeg_probe.py` using `ffprobe` to extract ISO 6709 location atoms.
-2. **Subagent `fullstack-craftsman` (Concert & Audio Intelligence)**:
-   - Implement `intelligence/geocoder.py` (Nominatim reverse geocode with SQLite TTL cache).
-   - Implement `intelligence/setlist_fm.py` (Setlist.fm API query with rate limiter).
-   - Implement `intelligence/shazam_matcher.py` (Shazamio async client).
-   - Implement `intelligence/ai_audio_judge.py` (Gemini 2.5 Flash setlist-constrained prompt).
-3. **Subagent `fullstack-craftsman` (YouTube Publisher & Review CLI)**:
-   - Implement `publisher/youtube_client.py` and `publisher/resumable_upload.py` (8MB chunk streaming).
-   - Implement `publisher/metadata_gen.py` (Title and description formatting).
-   - Implement `cli.py` with Typer + Rich for the interactive review workflow.
-4. **Subagent `quality-guardian` (Testing, Hardening & Anti-Slop)**:
-   - Create mock fixtures for Google Photos responses, Setlist.fm API payloads, and audio snippets.
-   - Implement automated pytest suite covering 100% of EXIF parsing, setlist matching, and title templating.
-   - Audit code against Anti-Slop 7 Pillars: no placeholder comments (`// TODO`), strict error handling, and type safety.
+The aiohttp homepage serves `stagesync/web/index.html`; its navigation embeds
+`dashboard.html` at `/workspace` and opens the ordered review, publishing, library
+and archive controls. `stagesync/web/workflow.py` registers workflow API routes. Existing scanning, media playback and source integrations remain
+in place. Counts and errors are sourced from the catalog and persisted publication jobs.
 
 ## Drive pre-catalog content screening
 
@@ -476,6 +454,28 @@ web review queue. Rescanning retries screening. Existing catalog rows are not cl
 Missing credentials, malformed responses, and media/API errors never admit a new row.
 Real-world precision still requires evaluation against labeled concert/non-concert clips.
 
-The production dashboard is loaded from `stagesync/web/dashboard.html`. The unfinished
-redesign remains in `stagesync/web/index.html`; it is not served because it lacks
-rejection filtering, manual song matching, and audio seeking supported by production.
+The root `index.html` shell preserves the approved visual design and loads actual
+workflow counts and show summaries. Its `/workspace` frame preserves catalog
+filtering, manual song matching, audio seeking and the new workflow editors.
+
+## Workflow CLI
+
+The workflow subcommand uses the same confirmations and publishing checks as the web UI:
+
+```bash
+stagesync workflow review VIDEO_ID
+stagesync workflow confirm VIDEO_ID --field venue --revision REVISION
+stagesync workflow confirm VIDEO_ID --field show --revision REVISION
+stagesync workflow confirm VIDEO_ID --field artist --revision REVISION
+stagesync workflow confirm VIDEO_ID --field song --revision REVISION --resolution unknown
+stagesync workflow approve VIDEO_ID
+stagesync workflow draft VIDEO_ID --edits '{"title":"Reviewed title"}'
+stagesync workflow enqueue VIDEO_ID
+stagesync upload --limit 3
+```
+
+Use the current revision returned by `review`; stale revisions are rejected. Cover
+resolution accepts `--original-artist`. Draft edits must include valid destinations
+and metadata before enqueue. Local schedule input is interpreted in America/Chicago;
+nonexistent spring-forward times are rejected and the repeated autumn hour provides
+an explicit first/second occurrence choice.

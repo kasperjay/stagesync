@@ -89,6 +89,19 @@ class SetlistFmClient:
         dt = dt_parser.parse(date_val)
         return dt.strftime("%Y-%m-%d")
 
+    def _matches_exact_context(self, item, event_date, venue_name=None, artist_name=None, city_name=None):
+        try:
+            if not item.get("eventDate") or self._format_date_standard(item["eventDate"]) != self._format_date_standard(event_date):
+                return False
+        except (ValueError, TypeError, OverflowError):
+            return False
+        venue = item.get("venue") or {}
+        pairs = ((venue_name, venue.get("name")),
+                 (artist_name, (item.get("artist") or {}).get("name")),
+                 (city_name, (venue.get("city") or {}).get("name")))
+        return all(not expected or " ".join(str(actual or "").split()).casefold() == " ".join(expected.split()).casefold()
+                   for expected, actual in pairs)
+
     def search_by_venue_and_date(
         self,
         event_date: str,
@@ -116,7 +129,8 @@ class SetlistFmClient:
         if not data:
             return None
 
-        setlists = data.get("setlist", [])
+        setlists = [item for item in data.get("setlist", [])
+                    if self._matches_exact_context(item, event_date, venue_name, city_name=city_name)]
         if not setlists:
             return None
 
@@ -161,27 +175,12 @@ class SetlistFmClient:
             if not setlists:
                 break
 
-            # If venue_name_hint is provided, match by venue name
-            if venue_name_hint:
-                hint_lower = venue_name_hint.lower().strip()
-                venue_matches = []
-                for s in setlists:
-                    v_name = s.get("venue", {}).get("name", "").lower()
-                    if hint_lower in v_name or v_name in hint_lower:
-                        venue_matches.append(s)
-                if venue_matches:
-                    matched = self.parse_setlist_payload(
-                        venue_matches[0], event_date, all_setlists=venue_matches
-                    )
-                    return matched
-
-            # If artist_name was specified and matched
-            if artist_name:
-                return self.parse_setlist_payload(setlists[0], event_date, all_setlists=setlists)
-
-            # If only 1 setlist exists for the whole city on that date and no venue hint
-            if len(setlists) == 1 and not venue_name_hint:
-                return self.parse_setlist_payload(setlists[0], event_date, all_setlists=setlists)
+            matches = [item for item in setlists if self._matches_exact_context(
+                item, event_date, venue_name_hint, artist_name, city_name)]
+            if matches and (venue_name_hint or artist_name or len(setlists) == 1):
+                best = self._best_setlist_record(matches)
+                same_show = [item for item in matches if self._show_key(item) == self._show_key(best)]
+                return self.parse_setlist_payload(best, event_date, all_setlists=same_show)
 
         return None
 

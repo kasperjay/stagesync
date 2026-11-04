@@ -490,17 +490,38 @@ stateDiagram-v2
     DOWNLOADING --> DOWNLOADED : Binary cached locally
     DOWNLOADED --> ANALYZING_METADATA : FFprobe / ExifTool
     ANALYZING_METADATA --> CONCERT_MATCHED : Venue & Setlist.fm found
-    ANALYZING_METADATA --> REJECTED : Not a concert clip (daytime, family video)
+    ANALYZING_METADATA --> REJECTED : Not a concert clip
     CONCERT_MATCHED --> SONG_IDENTIFIED : Shazamio or Gemini Audio match
     SONG_IDENTIFIED --> PENDING_REVIEW : Staged for Human Approval
     
     PENDING_REVIEW --> APPROVED : CLI 'stagesync review' or Web UI
     PENDING_REVIEW --> REJECTED : User discarded clip
     
-    APPROVED --> UPLOADING : YouTube Resumable Worker picked up
-    UPLOADING --> PUBLISHED : YouTube Video ID assigned
+    APPROVED --> QUEUED : Explicit publication action per channel
+    QUEUED --> UPLOADING : Revision-valid job claimed
+    UPLOADING --> UPLOADED : Private or unlisted upload complete
+    UPLOADING --> SCHEDULED : Private upload with future release
+    UPLOADING --> PUBLISHED : Public upload complete
     UPLOADING --> FAILED : Network error / Quota limit reached
     FAILED --> UPLOADING : Retry exponential backoff
     PUBLISHED --> [*]
     REJECTED --> [*]
 ```
+
+## Approval and publishing extension
+
+The legacy `youtube_uploads` table remains intact for compatibility and upload history.
+New publication dispatch uses `publication_jobs`, not legacy approved video rows.
+
+| Table | Key | Stored state |
+| --- | --- | --- |
+| `identity_reviews` | `video_id` | Identity revision, ordered field confirmations, approved revision, flag, song resolution and original artist |
+| `publication_drafts` | `video_id` | Identity revision, editable JSON metadata, review-required marker |
+| `publication_jobs` | `id`; unique `(video_id, channel_id)` | Channel, approved revision, dispatch status, JSON upload metadata/progress/session/result/errors |
+| `publication_defaults` | singleton `id=1` | Defaults for future drafts |
+
+The video foreign keys reference `videos(id)` with cascade deletion, consistent with the
+catalog. Rejecting a match does not delete its video. Dependency invalidation preserves
+completed publication history and blocks pending jobs whose approved revision is stale.
+Drafts and jobs keep publication metadata separate from concert identity. A draft cannot
+be uploaded merely because its video has `APPROVED` status.

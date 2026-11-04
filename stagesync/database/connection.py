@@ -212,11 +212,22 @@ class Database:
         """Context manager providing an atomic database transaction."""
         conn = self._get_connection()
         cursor = conn.cursor()
+        nested = conn.in_transaction
+        savepoint = "nested_" + str(id(cursor))
+        if nested:
+            cursor.execute(f"SAVEPOINT {savepoint}")
         try:
             yield cursor
-            conn.commit()
+            if nested:
+                cursor.execute(f"RELEASE SAVEPOINT {savepoint}")
+            else:
+                conn.commit()
         except Exception:
-            conn.rollback()
+            if nested:
+                cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                cursor.execute(f"RELEASE SAVEPOINT {savepoint}")
+            else:
+                conn.rollback()
             raise
         finally:
             cursor.close()

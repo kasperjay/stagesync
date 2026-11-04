@@ -565,7 +565,7 @@ The Vault
 <!-- Show Detection -->
 <button class="nav-btn" id="nav-shows" onclick="switchView('shows')">
 <span style="font-size: 15px;">🎯</span>
-<span>Show Detection</span>
+<span>Library / Shows</span>
 </button>
 <!-- Audio ID -->
 <button class="nav-btn" id="nav-audio" onclick="switchView('audio')">
@@ -576,15 +576,16 @@ The Vault
 <button class="nav-btn" id="nav-review" onclick="switchView('review')" style="justify-content: space-between;">
 <div style="display: flex; align-items: center; gap: 12px;">
 <span style="font-size: 15px;">☑️</span>
-<span>Review Queue</span>
+<span>Ordered Approval</span>
 </div>
 <span id="badge-review-count" style="padding: 2px 7px; border-radius: 9999px; font-size: 11px; font-family: 'JetBrains Mono', monospace; font-weight: 700; background: rgba(255, 196, 0, 0.18); color: var(--amber); border: 1px solid rgba(255, 196, 0, 0.4);">Loading…</span>
 </button>
 Go Live
 <button class="nav-btn" id="nav-publish" onclick="switchView('publish')">
 <span style="font-size: 15px;">⭡</span>
-<span>Go Live</span>
+<span>Publish</span>
 </button>
+<button class="nav-btn" id="nav-archive" onclick="switchView('archive')"><span style="font-size:15px">▤</span><span>Archive</span></button>
 <!-- Analytics -->
 <!-- Settings -->
 <button class="nav-btn" id="nav-settings" onclick="switchView('settings')">
@@ -615,7 +616,7 @@ Go Live
 <!-- 2: Shows Detected -->
 <div class="kpi-card">
 <div style="display: flex; justify-content: space-between; align-items: center;">
-<span class="kpi-title">Published Videos</span>
+<span class="kpi-title">Shows Detected</span>
 <div style="width: 28px; height: 28px; border-radius: 8px; background: rgba(75, 42, 168, 0.25); border: 1px solid rgba(122, 0, 255, 0.4); display: flex; align-items: center; justify-content: center; color: var(--violet-neon); font-size: 12px;">🎯</div>
 </div>
 <div class="kpi-val" id="kpi-shows-detected">Loading…</div>
@@ -623,7 +624,7 @@ Go Live
 <!-- 3: Matches Verified -->
 <div class="kpi-card">
 <div style="display: flex; justify-content: space-between; align-items: center;">
-<span class="kpi-title">Uploads Today</span>
+<span class="kpi-title">Matches Verified</span>
 <div style="width: 28px; height: 28px; border-radius: 8px; background: rgba(0, 214, 187, 0.12); border: 1px solid rgba(0, 214, 187, 0.3); display: flex; align-items: center; justify-content: center; color: var(--turquoise); font-size: 12px;">✓</div>
 </div>
 <div class="kpi-val" id="kpi-matches-verified">Loading…</div>
@@ -639,7 +640,7 @@ Go Live
 <!-- 5: Ready to Publish -->
 <div class="kpi-card">
 <div style="display: flex; justify-content: space-between; align-items: center;">
-<span class="kpi-title">Ready to Publish</span>
+<span class="kpi-title">Approved Clips</span>
 <div style="width: 28px; height: 28px; border-radius: 8px; background: rgba(0, 217, 122, 0.12); border: 1px solid rgba(0, 217, 122, 0.3); display: flex; align-items: center; justify-content: center; color: var(--green); font-size: 12px;">⭡</div>
 </div>
 <div class="kpi-val" id="kpi-ready-publish">Loading…</div>
@@ -672,8 +673,8 @@ Go Live
 <th>Date</th>
 <th>Venue</th>
 <th>Clips</th>
-<th>Confidence</th>
-<th>Status</th>
+<th>Approved</th>
+<th>Public Clips</th>
 <th style="text-align: right;">Action</th>
 </tr>
 </thead>
@@ -727,10 +728,10 @@ Go Live
 <div style="display: flex; align-items: center; gap: 12px;">
 <div style="position: relative; width: 75px; height: 46px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); flex-shrink: 0;">
 ▶
-<span style="position: absolute; top: 2px; right: 2px; font-size: 9px; font-family: 'JetBrains Mono', monospace; background: rgba(0,0,0,0.8); color: #FFF; padding: 1px 3px; border-radius: 3px;">03:24</span>
+
 </div>
 <div style="flex: 1; min-width: 0;">
-<h4 class="font-display" style="font-size: 13px; font-weight: 700; color: #FFF;">Ready to Publish</h4>
+<h4 class="font-display" style="font-size: 13px; font-weight: 700; color: #FFF;">Approved Identity</h4>
 <p style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">
 <strong id="publish-count-label" style="color: var(--green);">Loading…</strong></p>
 </div>
@@ -738,7 +739,7 @@ Go Live
 <!-- CTA Button -->
 <button class="btn-cta" onclick="openPublishModal()" style="width: 100%;">
 <span>⭡</span>
-<span>Publish Ready Videos</span>
+<span>Open Publishing Drafts</span>
 </button>
 </div>
 <!-- Connected Platform Status Chips -->
@@ -769,9 +770,13 @@ let desiredView = 'dashboard';
 function controls() { return workspace.contentWindow; }
 function applyView() {
  const w=controls(); if (!w.setTab) return;
- const tabs={vault:'catalog',shows:'board',audio:'review',review:'review',publish:'catalog',settings:'overview'};
+ if(w.closeWorkflow) w.closeWorkflow();
+ if(desiredView==='dashboard') return;
+ const tabs={vault:'catalog',shows:'catalog',audio:'review',review:'review',publish:'catalog',archive:'catalog',settings:'overview'};
  w.setTab(tabs[desiredView] || 'board');
- w.setStatusFilter(desiredView==='publish'?'APPROVED':'ALL');
+ w.setStatusFilter('ALL');
+ if(desiredView==='publish' && w.openPublicationQueue) w.openPublicationQueue();
+ else if(w.openWorkflowLibrary && ['shows','review','archive'].includes(desiredView)) w.openWorkflowLibrary({shows:'library',review:'review',archive:'archive'}[desiredView]);
 }
 workspace.addEventListener('load',()=>{
  const style=workspace.contentDocument.createElement('style');
@@ -787,15 +792,24 @@ function switchView(view) {
  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active',b.id==='nav-'+view));
  applyView();
 }
-function openScanModal(){ controls().openScanModal(); switchView('shows'); }
+function openScanModal(){ switchView('vault'); controls().openScanModal(); }
 function openPublishModal(){ switchView('publish'); }
 function handleSearchSubmit(){ switchView('vault'); controls().onSearchInput(document.getElementById('global-search-input').value); }
 async function refreshDashboard(){
  try {
- const response=await fetch('/api/status'); if(!response.ok) throw Error('Status unavailable');
- const data=await response.json(), counts=data.status_counts;
- const values={'kpi-media-imported':data.total_videos,'kpi-shows-detected':counts.PUBLISHED||0,'kpi-matches-verified':data.uploads_today,'kpi-review-needed':counts.PENDING_REVIEW||0,'kpi-ready-publish':counts.APPROVED||0,'badge-review-count':counts.PENDING_REVIEW||0,'queue-header-count':counts.PENDING_REVIEW||0,'publish-count-label':(counts.APPROVED||0)+' videos','status-youtube':data.services.youtube.authenticated?'Connected':'Not connected'};
+ const [response,workflowResponse]=await Promise.all([fetch('/api/status',{headers:{Accept:'application/json'}}),fetch('/api/workflow/overview',{headers:{Accept:'application/json'}})]);
+ if(!response.ok||!workflowResponse.ok) throw Error('Status unavailable');
+ const data=await response.json(), workflow=await workflowResponse.json(), counts=workflow.counts;
+ const values={'kpi-media-imported':data.total_videos,'kpi-shows-detected':workflow.detected_shows,'kpi-matches-verified':workflow.verified_matches,'kpi-review-needed':counts.PENDING_REVIEW||0,'kpi-ready-publish':workflow.approved_clips,'badge-review-count':counts.PENDING_REVIEW||0,'queue-header-count':counts.PENDING_REVIEW||0,'publish-count-label':workflow.approved_clips+' approved clips · '+workflow.queued_jobs+' queued jobs','status-youtube':data.services.youtube.authenticated?'Credentials saved':'Not connected'};
  for(const [id,value] of Object.entries(values)) document.getElementById(id).textContent=value;
+ const tbody=document.getElementById('recent-shows-tbody');tbody.replaceChildren();
+ const shows=[...workflow.shows].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,6);
+ for(const show of shows){
+   const row=document.createElement('tr');
+   for(const value of [show.name,show.date,show.venue||'Unconfirmed',show.clips.length,show.approved,show.published]){const cell=document.createElement('td');cell.textContent=value;row.append(cell);}
+   const cell=document.createElement('td'),button=document.createElement('button');button.className='btn-outline';button.textContent='Review';button.onclick=()=>{switchView('vault');if(show.clips[0])controls().openWorkflow(show.clips[0].id);};cell.append(button);row.append(cell);tbody.append(row);
+ }
+ if(!shows.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=7;cell.textContent='No detected shows yet.';row.append(cell);tbody.append(row);}
  const list=document.getElementById('review-queue-list'); list.replaceChildren();
  const button=document.createElement('button'); button.className='btn-outline';
  button.textContent=counts.PENDING_REVIEW?'Review '+counts.PENDING_REVIEW+' clips':'No clips awaiting review';

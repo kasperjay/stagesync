@@ -225,15 +225,15 @@ class TestPipelineIntegration(unittest.TestCase):
         self.db.save_identification(ident)
         coordinator = PipelineCoordinator(db=self.db)
 
-        with self.assertRaisesRegex(ValueError, "lyrics-based suggestion"):
+        with self.assertRaisesRegex(ValueError, "Confirm Venue") :
             coordinator.approve_video(video.id)
         self.assertIsNone(self.db.get_youtube_upload_by_video_id(video.id))
 
         confirmed = coordinator.confirm_suggested_match(video.id)
-        self.assertEqual(confirmed.processing_status, VideoStatus.APPROVED)
+        self.assertEqual(confirmed.processing_status, VideoStatus.PENDING_REVIEW)
         confirmed_ident = self.db.get_identification_by_video_id(video.id)
         self.assertEqual(confirmed_ident.status, "CONFIRMED")
-        self.assertIsNotNone(self.db.get_youtube_upload_by_video_id(video.id))
+        self.assertIsNone(self.db.get_youtube_upload_by_video_id(video.id))
 
 
 if __name__ == "__main__":

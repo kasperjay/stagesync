@@ -205,7 +205,7 @@ class PipelineCoordinator:
         self.download_dir = (self.settings.cache_dir / "downloads").resolve()
         self.download_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_song_options(self, video_id: str, query: str = "") -> Dict[str, Any]:
+    def get_song_options(self, video_id: str, query: str = "", discography: bool = False) -> Dict[str, Any]:
         """Return setlist songs first, then bounded discography search results with explicit status/errors."""
         video = self.db.get_video(video_id)
         if not video:
@@ -223,6 +223,13 @@ class PipelineCoordinator:
             and ident_artist.casefold() != headliner_artist.casefold()
         )
         setlist_songs = [] if is_opener else self._setlist_song_titles(concert)
+        if is_opener and concert:
+            for entry in concert.setlist_data.get("_stagesync_lineup_setlists", []):
+                if entry.get("artist", "").casefold() == ident_artist.casefold():
+                    setlist_songs = entry.get("songs", [])
+                    break
+        if discography:
+            setlist_songs = []
         normalized_query = query.strip().casefold()
 
         if setlist_songs:
@@ -1247,7 +1254,7 @@ class PipelineCoordinator:
         if dur < self.settings.min_duration_seconds:
             video.processing_status = VideoStatus.REJECTED
         elif confidence >= self.settings.auto_approve_threshold and video.is_concert_candidate and not suggestion_only:
-            video.processing_status = VideoStatus.APPROVED
+            video.processing_status = VideoStatus.PENDING_REVIEW
         elif (confidence >= 0.50 or matched_concert) and video.is_concert_candidate:
             video.processing_status = VideoStatus.PENDING_REVIEW
         elif video.is_concert_candidate:
@@ -1348,64 +1355,13 @@ class PipelineCoordinator:
         artist_override: Optional[str] = None,
         privacy_override: Optional[PrivacyStatus] = None,
     ) -> Video:
-        """Approve candidate video for YouTube upload, applying optional manual edits."""
-        video = self.db.get_video(video_id)
-        if not video:
-            raise ValueError(f"Video {video_id} not found.")
-
-        ident = self.db.get_identification_by_video_id(video_id)
-        if ident and ident.status == "SUGGESTED":
-            raise ValueError("This video has a lyrics-based suggestion. Confirm the suggested song before approving it.")
-        if ident and (song_title_override or artist_override):
-            if song_title_override:
-                ident.detected_song_title = song_title_override
-            if artist_override:
-                ident.detected_artist = artist_override
-            ident.status = "MANUAL_OVERRIDE"
-            self.db.save_identification(ident)
-
-        concert = self.db.get_concert(ident.concert_id) if ident and ident.concert_id else None
-        venue = None
-        if concert and concert.venue_id:
-            venue = self.db.get_venue(concert.venue_id)
-        elif video.latitude and video.longitude:
-            venue = self.db.find_venue_by_coords(video.latitude, video.longitude)
-
-        # Regenerate YouTube metadata with updated values
-        meta = self.metadata_gen.generate_metadata(video, ident, concert, venue)
-        resolved_title = (
-            title_override.strip()[: self.metadata_gen.MAX_TITLE_LENGTH]
-            if title_override and title_override.strip()
-            else meta.title
-        )
-        resolved_privacy = privacy_override or PrivacyStatus(self.settings.default_privacy)
-
-        upload_job = self.db.get_youtube_upload_by_video_id(video_id)
-        if upload_job:
-            upload_job.title = resolved_title
-            upload_job.description = meta.description
-            upload_job.tags = meta.tags
-            if privacy_override:
-                upload_job.privacy_status = privacy_override
-            upload_job.upload_status = "QUEUED"
-            upload_job.upload_resumable_uri = None
-            upload_job.error_message = None
-        else:
-            upload_job = YouTubeUpload(
-                video_id=video_id,
-                title=resolved_title,
-                description=meta.description,
-                tags=meta.tags,
-                category_id=meta.category_id,
-                privacy_status=resolved_privacy,
-                upload_status="QUEUED",
-                total_bytes=video.file_size_bytes or 0,
-            )
-        self.db.save_youtube_upload(upload_job)
-
-        video.processing_status = VideoStatus.APPROVED
-        self.db.save_video(video)
-        return video
+        from stagesync.workflow import Workflow
+        if song_title_override or artist_override:
+            ident = self.db.get_identification_by_video_id(video_id)
+            if not ident:
+                raise ValueError("Select the show's performing artist first")
+            self.reidentify_video_with_band(video_id, artist_override or ident.detected_artist, song_title_override)
+        return Workflow(self).approve(video_id)
 
     def confirm_suggested_match(
         self,
@@ -1421,11 +1377,8 @@ class PipelineCoordinator:
             ident.detected_song_title = title_override.strip()
         ident.status = "CONFIRMED"
         self.db.save_identification(ident)
-        return self.approve_video(
-            video_id=video_id,
-            title_override=title_override,
-            privacy_override=privacy_override,
-        )
+        self.db.update_video_status(video_id, VideoStatus.PENDING_REVIEW)
+        return self.db.get_video(video_id)
 
     def reject_video(self, video_id: str) -> Video:
         """Reject video candidate."""
@@ -2025,6 +1978,12 @@ class PipelineCoordinator:
 
         return video, concert, ident
 
+    def _match_context(self, video_id: str):
+        ident = self.db.get_identification_by_video_id(video_id)
+        concert = self.db.get_concert(ident.concert_id) if ident and ident.concert_id else None
+        venue = self.db.get_venue(concert.venue_id) if concert and concert.venue_id else None
+        return (ident.model_dump() if ident else None, concert.model_dump() if concert else None, venue.model_dump() if venue else None)
+
     def match_video_song(self, video_id: str) -> Dict[str, Any]:
         """Run multi-window audio song matching on a single video without clobbering user edits.
 
@@ -2082,6 +2041,7 @@ class PipelineCoordinator:
 
         # 2. Load existing identification / concert / venue context (preserving user-selected band/venue)
         ident = self.db.get_identification_by_video_id(video.id)
+        match_context = self._match_context(video_id)
         preserved_artist = self._usable_artist(ident.detected_artist if ident else "")
         preserved_status = ident.status if ident else "CONFIRMED"
         concert: Optional[Concert] = self.db.get_concert(ident.concert_id) if ident and ident.concert_id else None
@@ -2313,6 +2273,10 @@ class PipelineCoordinator:
             "gemini_reasoning": gemini_reasoning,
         }
 
+        current_context = self._match_context(video_id)
+        if current_context != match_context:
+            return {"success": True, "matched": False, "outcome": "stale", "message": "Identity changed while matching; result discarded", "video": self.db.get_video(video.id)}
+
         # 7A. Outcome: MATCHED
         if detected_song and confidence >= 0.50:
             if not ident:
@@ -2344,7 +2308,17 @@ class PipelineCoordinator:
                 if lyrics_snippet:
                     ident.identified_lyrics_snippet = lyrics_snippet
                 ident.raw_service_payload = raw_payload
-            self.db.save_identification(ident)
+            connection = self.db._get_connection()
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                if self._match_context(video_id) != match_context:
+                    connection.rollback()
+                    return {"success": True, "matched": False, "outcome": "stale", "message": "Identity changed; result discarded", "video": self.db.get_video(video.id)}
+                self.db.save_identification(ident)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
 
             if video.processing_status in (
                 VideoStatus.DISCOVERED,
@@ -2572,42 +2546,7 @@ class PipelineCoordinator:
         privacy_override: Optional[PrivacyStatus] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[UploadResult]:
-        """Dispatch upload worker for approved video queue."""
-        approved = self.db.list_videos(status=VideoStatus.APPROVED, limit=limit or 10)
-        results: List[UploadResult] = []
-
-        for v in approved:
-            upload_job = self.db.get_youtube_upload_by_video_id(v.id)
-            if not upload_job or not v.file_path:
-                continue
-
-            privacy = privacy_override or upload_job.privacy_status
-            meta = FormattedYouTubeMetadata(
-                title=upload_job.title,
-                description=upload_job.description,
-                tags=upload_job.tags,
-                category_id=upload_job.category_id,
-                recording_date=v.recorded_at_utc or v.recorded_at_local,
-                latitude=v.latitude,
-                longitude=v.longitude,
-            )
-
-            self.db.update_video_status(v.id, VideoStatus.UPLOADING)
-
-            res = self.uploader.upload_file(
-                video_id=v.id,
-                file_path=v.file_path,
-                metadata=meta,
-                privacy=privacy,
-                progress_callback=progress_callback,
-                existing_resumable_uri=upload_job.upload_resumable_uri,
-            )
-
-            if res.success:
-                self.db.update_video_status(v.id, VideoStatus.PUBLISHED)
-            else:
-                self.db.update_video_status(v.id, VideoStatus.FAILED)
-
-            results.append(res)
-
-        return results
+        from stagesync.workflow import Workflow
+        if privacy_override is not None:
+            raise ValueError("Save privacy in the publishing draft before queueing")
+        return Workflow(self).dispatch(limit=limit or 10, progress_callback=progress_callback)

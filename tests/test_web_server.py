@@ -826,41 +826,16 @@ class TestWebServerApproveRealCoordinator(AioHTTPTestCase):
         await super().tearDownAsync()
         self.temp_dir.cleanup()
 
-    async def test_approve_video_persists_title_override_and_privacy_with_real_coordinator(self):
-        """Ensure real PipelineCoordinator.approve_video accepts title_override and queues YouTubeUpload."""
-        video = Video(
-            id="v_real_1",
-            source_photo_id="sp_real_1",
-            filename="IMG_6147.MOV",
-            duration_seconds=52.0,
-            processing_status=VideoStatus.PENDING_REVIEW,
-        )
+    async def test_approval_requires_complete_ordered_identity(self):
+        """Legacy approval calls cannot bypass field confirmation or queue uploads."""
+        video = Video(id="v_real_1",source_photo_id="sp_real_1",filename="IMG_6147.MOV",duration_seconds=52,processing_status=VideoStatus.PENDING_REVIEW)
         self.real_db.save_video(video)
-
-        resp = await self.client.post(
-            "/api/video/v_real_1/approve",
-            json={
-                "title": "Gideon - Take Off (Live at Come and Take It Live, Austin - Oct 13, 2023)",
-                "privacy": "PUBLIC",
-            },
-        )
-        self.assertEqual(resp.status, 200)
-        self.assertEqual(resp.content_type, "application/json")
-        payload = await resp.json()
-        self.assertTrue(payload["success"])
-        self.assertEqual(payload["video"]["processing_status"], "APPROVED")
-
-        saved_video = self.real_db.get_video("v_real_1")
-        self.assertEqual(saved_video.processing_status, VideoStatus.APPROVED)
-
-        upload_job = self.real_db.get_youtube_upload_by_video_id("v_real_1")
-        self.assertIsNotNone(upload_job)
-        self.assertEqual(
-            upload_job.title,
-            "Gideon - Take Off (Live at Come and Take It Live, Austin - Oct 13, 2023)",
-        )
-        self.assertEqual(upload_job.privacy_status, PrivacyStatus.PUBLIC)
-        self.assertEqual(upload_job.upload_status, "QUEUED")
+        response = await self.client.post('/api/video/v_real_1/approve',json={'title':'Publishing title','privacy':'PUBLIC'})
+        self.assertEqual(response.status,404)
+        payload = await response.json()
+        self.assertIn('Confirm Venue',payload['error'])
+        self.assertEqual(self.real_db.get_video(video.id).processing_status,VideoStatus.PENDING_REVIEW)
+        self.assertIsNone(self.real_db.get_youtube_upload_by_video_id(video.id))
 
 
 if __name__ == "__main__":

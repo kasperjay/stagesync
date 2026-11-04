@@ -435,12 +435,25 @@ def cmd_review(args: argparse.Namespace) -> None:
             console.print("[bold yellow]🎸 LINEUP ACTION: Concert correlated, but performing band & song are unconfirmed.[/bold yellow]")
             console.print("[bold yellow]   Press [B] to select who performed in this clip from the show's lineup roster.[/bold yellow]\n")
 
-        console.print("[bold white][A][/bold white] Approve & Queue Upload   [bold white][B][/bold white] Which band is this?   [bold white][V][/bold white] Set/Search Venue   [bold white][E][/bold white] Edit Metadata   [bold white][P][/bold white] Change Privacy   [bold white][R][/bold white] Reject   [bold white][S][/bold white] Skip")
+        console.print("[bold white][A][/bold white] Confirm Identity & Approve   [bold white][B][/bold white] Which band is this?   [bold white][V][/bold white] Set/Search Venue   [bold white][E][/bold white] Edit Metadata   [bold white][P][/bold white] Change Privacy   [bold white][R][/bold white] Reject   [bold white][S][/bold white] Skip")
         choice = Prompt.ask("Selection", choices=["a", "b", "v", "e", "p", "r", "s", "A", "B", "V", "E", "P", "R", "S"], default=default_choice).lower()
 
         if choice == "a":
-            coordinator.approve_video(vid.id)
-            console.print("[bold green]✓ Approved for upload.[/bold green]\n")
+            from stagesync.workflow import Workflow, FIELDS
+            workflow = Workflow(coordinator)
+            try:
+                for field in FIELDS:
+                    state = workflow.review(vid.id)
+                    if not Confirm.ask(f"Confirm {field}: {state['values'][field]}", default=False):
+                        break
+                    resolution = Prompt.ask("Song resolution", choices=['identified','manual','cover','improvisation','unknown'], default='identified') if field == 'song' else 'identified'
+                    original = Prompt.ask("Original recording artist") if resolution == 'cover' else ''
+                    workflow.confirm(vid.id, field, state['revision'], resolution, original)
+                else:
+                    workflow.approve(vid.id)
+                    console.print("[green]Identity approved. Publication requires an explicit queued draft.[/green]")
+            except ValueError as exc:
+                console.print(f"[red]{exc}[/red]")
         elif choice == "b":
             if not concert:
                 console.print("[yellow]No concert associated with this video yet. Use [V] to set venue and find concert first.[/yellow]\n")
@@ -559,12 +572,16 @@ def cmd_review(args: argparse.Namespace) -> None:
         elif choice == "e":
             new_title = Prompt.ask("Override Song Title", default=ident.detected_song_title if ident else "")
             new_artist = Prompt.ask("Override Artist", default=ident.detected_artist if ident else (concert.headliner_artist if concert else ""))
-            coordinator.approve_video(vid.id, song_title_override=new_title, artist_override=new_artist)
-            console.print("[bold green]✓ Updated & Approved.[/bold green]\n")
+            coordinator.reidentify_video_with_band(vid.id, new_artist, new_title)
+            console.print("[bold green]✓ Updated. Confirm identity before approval.[/bold green]\n")
         elif choice == "p":
             new_priv = Prompt.ask("Select Privacy", choices=["private", "unlisted", "public"], default="unlisted")
-            coordinator.approve_video(vid.id, privacy_override=PrivacyStatus(new_priv))
-            console.print(f"[bold green]✓ Privacy set to {new_priv} & Approved.[/bold green]\n")
+            from stagesync.workflow import Workflow
+            try:
+                Workflow(coordinator).draft(vid.id, {'privacy_status':new_priv})
+                console.print(f"[green]Draft privacy set to {new_priv}.[/green]")
+            except ValueError as exc:
+                console.print(f"[red]{exc}[/red]")
         elif choice == "r":
             coordinator.reject_video(vid.id)
             console.print("[bold red]✗ Rejected candidate.[/bold red]\n")
@@ -572,19 +589,37 @@ def cmd_review(args: argparse.Namespace) -> None:
             console.print("[yellow]Skipped to next candidate.[/yellow]\n")
 
 
+def cmd_workflow(args: argparse.Namespace) -> None:
+    """Inspect and explicitly advance identity or publication state."""
+    import json
+    from stagesync.workflow import Workflow
+    workflow = Workflow(PipelineCoordinator())
+    try:
+        if args.action == 'review':
+            result = workflow.review(args.video_id)
+        elif args.action == 'confirm':
+            state = workflow.review(args.video_id)
+            result = workflow.confirm(args.video_id, args.field, args.revision or state['revision'], args.resolution, args.original_artist)
+        elif args.action == 'approve':
+            result = workflow.approve(args.video_id).model_dump(mode='json')
+        elif args.action == 'draft':
+            result = workflow.draft(args.video_id, json.loads(args.edits) if args.edits else None)
+        else:
+            result = workflow.enqueue(args.video_id)
+        console.print_json(data=result)
+    except (ValueError, TypeError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1)
+
+
 def cmd_upload(args: argparse.Namespace) -> None:
     """Upload approved videos using chunked resumable upload."""
     coordinator = PipelineCoordinator()
     db = get_db()
-    approved = db.list_videos(status=VideoStatus.APPROVED, limit=args.limit or 10)
-
-    if not approved:
-        console.print("[bold yellow]No approved videos pending upload.[/bold yellow]")
+    if args.privacy:
+        console.print("[red]Edit privacy in the publishing draft before explicitly queueing.[/red]")
         return
-
-    console.print(f"[bold cyan]Found {len(approved)} approved video(s) to upload.[/bold cyan]")
-
-    privacy_override = PrivacyStatus(args.privacy) if args.privacy else None
+    privacy_override = None
 
     with Progress(
         TextColumn("[bold blue]{task.description}"),
@@ -846,6 +881,16 @@ def main() -> None:
     p_review = subparsers.add_parser("review", help="Interactive TUI review queue")
     p_review.add_argument("--non-interactive", action="store_true", help="Print table without interactive prompt")
     p_review.set_defaults(func=cmd_review)
+
+    p_workflow = subparsers.add_parser("workflow", help="Ordered review and explicit publication queue")
+    p_workflow.add_argument("action", choices=['review','confirm','approve','draft','enqueue'])
+    p_workflow.add_argument("video_id")
+    p_workflow.add_argument("--field", choices=['venue','show','artist','song'])
+    p_workflow.add_argument("--revision")
+    p_workflow.add_argument("--resolution", default='identified')
+    p_workflow.add_argument("--original-artist", default='')
+    p_workflow.add_argument("--edits", help="Draft edits as JSON")
+    p_workflow.set_defaults(func=cmd_workflow)
 
     # upload
     p_upload = subparsers.add_parser("upload", help="Upload approved videos to YouTube")

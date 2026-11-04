@@ -98,6 +98,14 @@ class ResumableUploader:
             },
         }
 
+        if metadata.publish_at:
+            when = dt_parser.isoparse(metadata.publish_at)
+            if when.tzinfo is None or when <= datetime.datetime.now(datetime.timezone.utc):
+                raise ValueError("Scheduled release must be in the future")
+            if body["status"]["privacyStatus"] != "private":
+                raise ValueError("Scheduled release requires private visibility")
+            body["status"]["publishAt"] = when.astimezone(datetime.timezone.utc).isoformat()
+
         recording_details: Dict[str, Any] = {}
         normalized_date = self._normalize_recording_date(metadata.recording_date)
         if normalized_date:
@@ -201,7 +209,30 @@ class ResumableUploader:
             upload_record.total_bytes = file_size
             self.db.save_youtube_upload(upload_record)
 
+        def complete(payload):
+            yt_vid_id = payload.get("id")
+            if not yt_vid_id:
+                return UploadResult(success=False, error_message="Upload completed but provider returned no video ID; manual reconciliation required")
+            yt_url = f"https://youtu.be/{yt_vid_id}"
+            if progress_callback:
+                progress_callback(file_size, file_size)
+            if upload_record:
+                upload_record.youtube_video_id = yt_vid_id
+                upload_record.youtube_url = yt_url
+                upload_record.upload_status = "COMPLETED"
+                upload_record.bytes_uploaded = file_size
+                upload_record.uploaded_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                self.db.save_youtube_upload(upload_record)
+            return UploadResult(success=True, youtube_video_id=yt_vid_id, youtube_url=yt_url, bytes_uploaded=file_size, total_bytes=file_size)
+
         bytes_uploaded = 0
+        if existing_resumable_uri:
+            recovered = self._query_upload_status(upload_uri, file_size)
+            if recovered is None:
+                return UploadResult(success=False, error_message="Unable to recover upload session; retained for retry")
+            if recovered == file_size:
+                return complete(getattr(self, '_completed_payload', {}))
+            bytes_uploaded = recovered
 
         # Upload loop
         with path.open("rb") as f:
@@ -233,29 +264,7 @@ class ResumableUploader:
                         )
                         if res.status_code in (200, 201):
                             # Completed!
-                            payload = res.json()
-                            yt_vid_id = payload.get("id")
-                            yt_url = f"https://youtu.be/{yt_vid_id}" if yt_vid_id else None
-
-                            bytes_uploaded = file_size
-                            if progress_callback:
-                                progress_callback(file_size, file_size)
-
-                            if upload_record:
-                                upload_record.youtube_video_id = yt_vid_id
-                                upload_record.youtube_url = yt_url
-                                upload_record.upload_status = "COMPLETED"
-                                upload_record.bytes_uploaded = file_size
-                                upload_record.uploaded_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                                self.db.save_youtube_upload(upload_record)
-
-                            return UploadResult(
-                                success=True,
-                                youtube_video_id=yt_vid_id,
-                                youtube_url=yt_url,
-                                bytes_uploaded=file_size,
-                                total_bytes=file_size,
-                            )
+                            return complete(res.json())
 
                         elif res.status_code == 308:
                             # Resume Incomplete
@@ -291,6 +300,8 @@ class ResumableUploader:
                         # Query status
                         recovered = self._query_upload_status(upload_uri, file_size)
                         if recovered is not None:
+                            if recovered == file_size:
+                                return complete(getattr(self, "_completed_payload", {}))
                             bytes_uploaded = recovered
                             chunk_success = True
                             break
@@ -324,7 +335,9 @@ class ResumableUploader:
                 range_header = res.headers.get("Range")
                 if range_header:
                     return int(range_header.split("-")[1]) + 1
+                return 0
             elif res.status_code in (200, 201):
+                self._completed_payload = res.json()
                 return total_bytes
         except Exception as e:
             logger.warning("Status query failed: %s", e)

@@ -139,14 +139,14 @@ python3 -m stagesync.cli process
 python3 -m stagesync.cli review
 ```
 
-### Upload Approved Videos
+### Dispatch Explicitly Queued Publications
 
 ```bash
-# Upload approved videos (respecting MAX_DAILY_UPLOADS=5 quota)
+# Dispatch publication jobs explicitly queued in Publish (respecting quota)
 python3 -m stagesync.cli upload
 
-# Force upload with privacy override
-python3 -m stagesync.cli upload --limit 3 --privacy unlisted
+# Limit the number of queued jobs processed
+python3 -m stagesync.cli upload --limit 3
 ```
 
 ---
@@ -158,3 +158,26 @@ Run the test suite:
 ```bash
 python3 -m unittest discover tests
 ```
+
+## Approval and publishing
+
+The live aiohttp homepage serves `stagesync/web/index.html`, whose navigation opens
+the working `dashboard.html` interface at `/workspace`. Review confirms **Venue → Show → Artist → Song**.
+Suggested identities require confirmation. Unknown tracks, improvisations and covers
+are explicit resolutions; a manual confirmation is not an acoustic confidence score.
+
+Approval verifies identity and may create a draft. It does not queue or upload media.
+Use Publish to edit title, description, tags, privacy, thumbnail frame and destinations,
+then explicitly queue Upload Now or a future scheduled release. Schedules use
+America/Chicago for display and UTC for persistence; scheduled YouTube releases require
+private uploads. Uploaded-private, scheduled and publicly published are distinct states.
+
+Identity changes invalidate dependent confirmations and block stale publication jobs.
+Draft text is preserved and marked for review; regeneration is explicit. Existing
+legacy queued uploads require fresh publication review. Published history and source
+media are retained. CLI and daemon dispatch only explicitly queued publication jobs.
+
+Authenticated channels are resolved from YouTube rather than placeholder account names.
+Additional channel tokens live in the `channels` directory beside the configured
+YouTube token. Each clip/channel pair has its own persisted job, resumable session,
+result URL and error. Thumbnail failures are retried separately from successful uploads.

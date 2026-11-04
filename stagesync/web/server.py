@@ -179,6 +179,8 @@ def create_app(
     app[DB_KEY] = db or get_db()
     app[COORD_KEY] = coordinator or PipelineCoordinator(db=app[DB_KEY], settings=app[SETTINGS_KEY])
     app[SCAN_STATE_KEY] = ScanState()
+    from stagesync.web.workflow import register
+    register(app, COORD_KEY)
 
     # Static assets route
     static_dir = Path(__file__).parent / "static"
@@ -859,7 +861,10 @@ async def handle_song_options(request: web.Request) -> web.Response:
     video_id = request.match_info["id"]
     query = request.query.get("q", "")
     try:
-        data = await asyncio.to_thread(coordinator.get_song_options, video_id, query)
+        if request.query.get("source") == "discography":
+            data = await asyncio.to_thread(coordinator.get_song_options, video_id, query, discography=True)
+        else:
+            data = await asyncio.to_thread(coordinator.get_song_options, video_id, query)
         status = 502 if data.get("error") else 200
         return web.json_response(data, status=status)
     except ValueError as exc:

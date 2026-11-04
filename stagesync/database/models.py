@@ -31,6 +31,8 @@ class VideoStatus(str, Enum):
     REJECTED = "REJECTED"
     UPLOADING = "UPLOADING"
     PUBLISHED = "PUBLISHED"
+    SCHEDULED = "SCHEDULED"
+    UPLOADED = "UPLOADED"
     FAILED = "FAILED"
 
 

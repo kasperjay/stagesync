@@ -37,6 +37,36 @@ class TestSetlistFm(unittest.TestCase):
         self.assertEqual(len(encore_songs), 2)
         self.assertEqual(encore_songs[0].name, "Iron Lung")
 
+    def test_selected_context_rejects_wrong_venue_artist_and_date(self):
+        from copy import deepcopy
+        original = SAMPLE_SETLIST_FM_PAYLOAD["setlist"][0]
+        for field in ("venue", "artist", "date", "missing_date"):
+            candidate = deepcopy(original)
+            if field == "venue":
+                candidate["venue"]["name"] = "Red Rocks"
+            elif field == "artist":
+                candidate["artist"]["name"] = "Marzomets"
+            elif field == "date":
+                candidate["eventDate"] = "16-08-2024"
+            else:
+                candidate.pop("eventDate", None)
+            with self.subTest(field=field), patch.object(self.client, "_fetch_setlists_raw", return_value={"setlist": [candidate]}):
+                result = self.client.search_by_city_and_date(
+                    "2024-08-15", "Morrison", "King Gizzard & The Lizard Wizard",
+                    "Red Rocks Amphitheatre", max_pages=1)
+                self.assertIsNone(result)
+
+    def test_venue_lookup_excludes_other_dates_and_venues_from_lineup(self):
+        from copy import deepcopy
+        original = SAMPLE_SETLIST_FM_PAYLOAD["setlist"][0]
+        unrelated = deepcopy(original)
+        unrelated["artist"]["name"] = "Unrelated Artist"
+        unrelated["eventDate"] = "16-08-2024"
+        with patch.object(self.client, "_fetch_setlists_raw", return_value={"setlist": [unrelated, original]}):
+            result = self.client.search_by_venue_and_date("2024-08-15", "Red Rocks Amphitheatre", "Morrison")
+        self.assertEqual(result.headliner_artist, "King Gizzard & The Lizard Wizard")
+        self.assertNotIn("Unrelated Artist", result.lineup_artists)
+
     def test_date_formatting(self) -> None:
         api_date = self.client._format_date_for_api("2024-08-15")
         self.assertEqual(api_date, "15-08-2024")
