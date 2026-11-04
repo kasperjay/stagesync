@@ -130,7 +130,7 @@ class ScanCancelled(Exception):
 
 SCAN_STATE_KEY = web.AppKey("scan_state", ScanState)
 
-INDEX_HTML_PATH = Path(__file__).parent / "dashboard.html"
+INDEX_HTML_PATH = Path(__file__).parent / "index.html"
 
 
 def _get_html_page() -> str:
@@ -187,6 +187,7 @@ def create_app(
 
     # Register Routes
     app.router.add_get("/", handle_index)
+    app.router.add_get("/workspace", handle_workspace)
     app.router.add_get("/api/status", handle_get_status)
     app.router.add_get("/api/scan/{scan_id}", handle_get_scan)
     app.router.add_post("/api/scan/{scan_id}/cancel", handle_cancel_scan)
@@ -230,13 +231,21 @@ async def handle_index(request: web.Request) -> web.Response:
     )
 
 
+async def handle_workspace(request: web.Request) -> web.Response:
+    return web.Response(
+        text=(Path(__file__).parent / "dashboard.html").read_text(encoding="utf-8"),
+        content_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def handle_get_status(request: web.Request) -> web.Response:
     """Return JSON system status, integration health, and quotas."""
     db: Database = request.app[DB_KEY]
     coordinator: PipelineCoordinator = request.app[COORD_KEY]
     settings: Settings = request.app[SETTINGS_KEY]
 
-    all_videos = db.list_videos(limit=2000)
+    all_videos = db.list_videos(limit=-1)
     status_counts: Dict[str, int] = {}
     for v in all_videos:
         st = v.processing_status.value

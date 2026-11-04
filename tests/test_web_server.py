@@ -30,9 +30,19 @@ class TestWebServer(AioHTTPTestCase):
             settings=self.mock_settings,
         )
 
+    async def test_cinematic_home(self):
+        response = await self.client.get("/")
+        self.assertEqual(response.status, 200)
+        html = await response.text()
+        self.assertIn('id="recent-shows-tbody"', html)
+        self.assertIn('src="/workspace"', html)
+        self.assertNotIn('MOCK_SHOWS', html)
+        self.assertNotIn('Riverside Live', html)
+        self.assertNotIn('vs. last 7 days', html)
+
     async def test_get_index(self):
         """Verify dashboard HTML is served at root."""
-        resp = await self.client.get("/")
+        resp = await self.client.get("/workspace")
         self.assertEqual(resp.status, 200)
         text = await resp.text()
         self.assertIn("StageSync", text)
@@ -666,7 +676,7 @@ class TestWebServer(AioHTTPTestCase):
 
     async def test_manual_song_match_ui_controls_and_feedback(self):
         """Verify dashboard HTML includes manual song match triggers, toast feedback, and status banners."""
-        resp = await self.client.get("/")
+        resp = await self.client.get("/workspace")
         self.assertEqual(resp.status, 200)
         text = await resp.text()
 
@@ -687,7 +697,7 @@ class TestWebServer(AioHTTPTestCase):
 
     async def test_song_assist_modal_playback_progress_bar(self):
         """Verify the song selection modal contains an interactive playback progress bar and seeking controls."""
-        resp = await self.client.get("/")
+        resp = await self.client.get("/workspace")
         self.assertEqual(resp.status, 200)
         text = await resp.text()
 
