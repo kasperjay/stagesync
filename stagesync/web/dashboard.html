@@ -3405,6 +3405,7 @@
         closeSetlistAssistModal();
         await loadData();
         if (activeSelectedVideo && activeSelectedVideo.id === id) openDrawer(id);
+        openBandAssistModal(id);
         showToast({ type: 'success', title: 'Concert Matched', message: `${concert.tour_name || concert.headliner_artist} · ${concert.event_date} attached from Setlist.fm.`, durationMs: 6000 });
       } catch (err) {
         resultsBox.innerHTML = `<div class="text-center py-6 text-rose-300 text-xs">${escapeHtml(err?.message || String(err))}</div>`;
