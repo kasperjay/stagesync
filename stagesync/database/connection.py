@@ -737,7 +737,7 @@ class Database:
 
     def get_identification_by_video_id(self, video_id: str) -> Optional[Identification]:
         """Fetch identification associated with a video."""
-        sql = "SELECT * FROM identifications WHERE video_id = :vid ORDER BY match_confidence DESC LIMIT 1"
+        sql = "SELECT * FROM identifications WHERE video_id = :vid ORDER BY (status = 'USER_ASSISTED_BAND') DESC, CASE WHEN status = 'USER_ASSISTED_BAND' THEN updated_at END DESC, match_confidence DESC, updated_at DESC LIMIT 1"
         conn = self._get_connection()
         row = conn.execute(sql, {"vid": video_id}).fetchone()
         if not row:

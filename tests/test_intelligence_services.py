@@ -34,6 +34,18 @@ class TestIntelligenceServices(unittest.TestCase):
     # AIAudioJudge Tests
     # -------------------------------------------------------------------------
 
+    def test_manual_artist_wins_over_high_confidence_historical_match(self) -> None:
+        video = Video(id="manual_priority", source_photo_id="manual_priority", filename="clip.mp4")
+        self.db.save_video(video)
+        manual = Identification(video_id=video.id, detected_artist="Selected Artist",
+                                detected_song_title="Live Performance", match_confidence=0.0,
+                                status="USER_ASSISTED_BAND")
+        self.db.save_identification(manual)
+        self.db.save_identification(Identification(
+            video_id=video.id, detected_artist="Marmozets", detected_song_title="Wrong song",
+            match_confidence=0.98))
+        self.assertEqual(self.db.get_identification_by_video_id(video.id).id, manual.id)
+
     def test_ai_audio_judge_missing_file_raises(self) -> None:
         judge = AIAudioJudge(api_key="mock_key")
         with self.assertRaises(FileNotFoundError):

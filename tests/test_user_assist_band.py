@@ -100,7 +100,8 @@ class TestUserAssistBandSelection(unittest.TestCase):
 
         self.assertEqual(up_ident.detected_artist, "Gideon")
         self.assertEqual(up_ident.status, "USER_ASSISTED_BAND")
-        self.assertTrue(up_ident.setlist_verified)
+        self.assertFalse(up_ident.setlist_verified)
+        self.assertEqual(up_ident.match_confidence, 0.0)
         self.assertEqual(up_vid.processing_status, VideoStatus.PENDING_REVIEW)
 
         # Verify YouTube draft title was updated with the chosen band

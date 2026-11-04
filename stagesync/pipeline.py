@@ -1872,7 +1872,7 @@ class PipelineCoordinator:
         setlist_source = artist_setlist.setlist_songs if artist_setlist else []
         if setlist_source:
             candidate_songs = [song.name for song in setlist_source if song.name]
-        elif concert:
+        elif concert and artist_clean.casefold() == concert.headliner_artist.casefold():
             for set_group in concert.setlist_data.get("sets", {}).get("set", []):
                 candidate_songs.extend(
                     song.get("name", "")
@@ -1892,6 +1892,8 @@ class PipelineCoordinator:
                 matched_song = self.shazam_matcher.recognize(audio_clip_path)
                 shazam_title = (matched_song.song_title or "").strip()
                 shazam_is_usable = matched_song.matched and (
+                    (matched_song.artist or "").strip().casefold() == artist_clean.casefold()
+                ) and (
                     not candidate_songs
                     or any(
                         candidate.lower() == shazam_title.lower()
@@ -1953,6 +1955,15 @@ class PipelineCoordinator:
                 status="USER_ASSISTED_BAND",
             )
         else:
+            if ident.detected_artist.casefold() != artist_clean.casefold():
+                ident.detected_song_title = "Live Performance"
+                ident.match_confidence = 0.0
+                ident.album_name = None
+                ident.setlist_verified = False
+                ident.track_number_in_setlist = None
+                ident.identified_lyrics_snippet = None
+                ident.raw_service_payload = {}
+                ident.fingerprint_service = "user_assisted_band"
             ident.detected_artist = artist_clean
             if song_title and song_title.strip():
                 ident.detected_song_title = song_title.strip()
@@ -1973,7 +1984,6 @@ class PipelineCoordinator:
                 ident.raw_service_payload = matched_song.raw_payload
             if concert:
                 ident.concert_id = concert.id
-                ident.setlist_verified = True
             ident.status = "USER_ASSISTED_BAND"
 
         self.db.save_identification(ident)
@@ -2163,13 +2173,11 @@ class PipelineCoordinator:
         def _is_artist_compatible(shazam_artist: Optional[str], song_title: Optional[str]) -> bool:
             if not preserved_artist:
                 return True
-            if candidate_song_list and self._is_setlist_song(song_title, candidate_song_list):
-                return True
             if not shazam_artist:
-                return True
+                return False
             a = preserved_artist.casefold()
             b = shazam_artist.strip().casefold()
-            return a in b or b in a
+            return a == b
 
         usable_shazam = [
             (idx, r)
