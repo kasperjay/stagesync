@@ -317,6 +317,9 @@ class Database:
         }
         with self.transaction() as cur:
             cur.execute(sql, params)
+            concert_id = self._date_concert(video.id)
+            if concert_id:
+                self._conform_date(video.id, concert_id, now)
         video.updated_at = now
         return video
 
@@ -695,7 +698,7 @@ class Database:
     # Identification Operations
     # -------------------------------------------------------------------------
 
-    def save_identification(self, ident: Identification) -> Identification:
+    def save_identification(self, ident: Identification, *, conform_date: bool = True) -> Identification:
         """Insert or replace identification record."""
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         sql = """
@@ -724,6 +727,8 @@ class Database:
             status=excluded.status,
             updated_at=:updated_at;
         """
+        if conform_date and not ident.concert_id:
+            ident.concert_id = self._date_concert(ident.video_id)
         params = {
             "id": ident.id,
             "video_id": ident.video_id,
@@ -743,8 +748,43 @@ class Database:
         }
         with self.transaction() as cur:
             cur.execute(sql, params)
+            if conform_date and ident.concert_id:
+                self._conform_date(ident.video_id, ident.concert_id, now)
         ident.updated_at = now
         return ident
+
+    def _date_videos(self, video_id: str):
+        return self._get_connection().execute("""
+            SELECT id FROM videos WHERE
+            substr(COALESCE(NULLIF(recorded_at_local, ''), recorded_at_utc), 1, 10) =
+            (SELECT substr(COALESCE(NULLIF(recorded_at_local, ''), recorded_at_utc), 1, 10)
+             FROM videos WHERE id = ?)
+        """, (video_id,)).fetchall()
+
+    def _date_concert(self, video_id: str) -> Optional[str]:
+        peers = self._date_videos(video_id)
+        matches = []
+        for peer in peers:
+            ident = self.get_identification_by_video_id(peer['id'])
+            if ident and ident.concert_id:
+                matches.append(ident)
+        return max(matches, key=lambda ident: ident.updated_at).concert_id if matches else None
+
+    def _conform_date(self, video_id: str, concert_id: str, now: str) -> None:
+        for peer in self._date_videos(video_id):
+            ident = self.get_identification_by_video_id(peer['id'])
+            if ident is None:
+                self.save_identification(Identification(
+                    video_id=peer['id'], concert_id=concert_id,
+                    detected_artist='Unknown Artist', detected_song_title='Live Performance',
+                    match_confidence=0, fingerprint_service='date_context',
+                ), conform_date=False)
+            else:
+                self._get_connection().execute("""
+                    UPDATE identifications SET concert_id = ?, setlist_verified = 0,
+                        track_number_in_setlist = NULL, updated_at = ?
+                    WHERE video_id = ? AND concert_id IS NOT ?
+                """, (concert_id, now, peer['id'], concert_id))
 
     def get_identification_by_video_id(self, video_id: str) -> Optional[Identification]:
         """Fetch identification associated with a video."""

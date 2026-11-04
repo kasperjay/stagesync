@@ -181,3 +181,12 @@ Authenticated channels are resolved from YouTube rather than placeholder account
 Additional channel tokens live in the `channels` directory beside the configured
 YouTube token. Each clip/channel pair has its own persisted job, resumable session,
 result URL and error. Thumbnail failures are retried separately from successful uploads.
+
+Same-date videos automatically share a concert record (venue and full lineup).
+GPS/ingestion matches and manual selections replace conflicting same-date show
+assignments; later imports inherit the date’s existing show. Grouping uses the
+local recording date, falling back to UTC only when local time is unavailable.
+Undated clips are not grouped. Artist and song remain clip-specific; changed
+show context clears setlist verification and requires publication review again.
+Active uploads retain the existing edit lock, so a conflicting update fails
+atomically rather than leaving the date partially synchronized.

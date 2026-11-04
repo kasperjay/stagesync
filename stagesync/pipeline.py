@@ -1750,7 +1750,7 @@ class PipelineCoordinator:
         for video in self.db.list_videos(limit=1000):
             local_date = video.recorded_at_local[:10] if video.recorded_at_local else None
             utc_date = video.recorded_at_utc[:10] if video.recorded_at_utc else None
-            if video.id != source_video_id and recorded_date in {local_date, utc_date}:
+            if video.id != source_video_id and recorded_date == (local_date or utc_date):
                 candidates.append(video)
 
         applied = []
