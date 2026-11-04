@@ -602,12 +602,6 @@ class PipelineCoordinator:
             source_id = f"drive_{file_id}"
             existing = self.db.get_video_by_source_id(source_id)
             if existing:
-                if not self._is_concert_candidate(
-                    existing.duration_seconds,
-                    existing.recorded_at_local or existing.recorded_at_utc,
-                ):
-                    logger.debug("Skipping existing Drive video outside concert candidate policy: %s", existing.filename)
-                    continue
                 if existing.processing_status == VideoStatus.REJECTED:
                     continue
                 # If already downloaded and available locally, skip
@@ -638,15 +632,6 @@ class PipelineCoordinator:
                 duration_ms = float(video_meta.get("durationMillis", 0)) or 0.0
                 duration_sec = duration_ms / 1000.0 if duration_ms > 0 else None
                 recorded_at = video_meta.get("time") or image_meta.get("time")
-
-                if not self._is_concert_candidate(duration_sec, recorded_at):
-                    logger.debug(
-                        "Skipping Drive item outside concert candidate policy: %s (duration=%s, recorded_at=%s)",
-                        clean_filename,
-                        duration_sec,
-                        recorded_at,
-                    )
-                    continue
 
                 # Pre-filter: Skip Live Photos and short clips (< min_duration_seconds)
                 if duration_sec is not None and duration_sec < self.settings.min_duration_seconds:
@@ -693,7 +678,8 @@ class PipelineCoordinator:
                 )
 
             if dry_run:
-                video.processing_status = VideoStatus.DISCOVERED
+                discovered_videos.append(video)
+                continue
             else:
                 target_file = self.download_dir / f"{video.id}_{clean_filename}"
                 try:
@@ -728,7 +714,7 @@ class PipelineCoordinator:
                         continue
                 except Exception as e:
                     logger.error("Download failed for Drive file %s: %s", file_id, e)
-                    video.processing_status = VideoStatus.FAILED
+                    continue
 
                 if parsed_start and parsed_end:
                     recorded_date = _parse_date(video.recorded_at_local or video.recorded_at_utc)
@@ -742,16 +728,24 @@ class PipelineCoordinator:
                         )
                         continue
 
-                if not self._is_concert_candidate(
-                    video.duration_seconds,
-                    video.recorded_at_local or video.recorded_at_utc,
-                ):
-                    with contextlib.suppress(OSError):
-                        Path(video.file_path or "").unlink()
-                    logger.debug(
-                        "Skipping downloaded Drive video outside concert candidate policy: %s",
-                        clean_filename,
-                    )
+                from stagesync.intelligence.concert_screen import screen_concert
+                from stagesync.security import secure_save_json
+
+                result = screen_concert(Path(video.file_path))
+                screening_dir = self.download_dir / "screening"
+                screening_dir.mkdir(parents=True, exist_ok=True)
+                secure_save_json(screening_dir / f"{video.id}.json", {
+                    "source_id": source_id,
+                    "filename": clean_filename,
+                    "file_path": video.file_path,
+                    "result": result,
+                })
+                if result["decision"] != "accept":
+                    logger.info("Drive content screening %s: %s (%s)",
+                                result["decision"], clean_filename, result["reason"])
+                    if progress_callback:
+                        progress_callback(item_index, len(all_items),
+                                          f"Content screening {result['decision']}: {clean_filename}")
                     continue
 
             saved = self.db.save_video(video)

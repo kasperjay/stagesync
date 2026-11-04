@@ -17,6 +17,9 @@ class TestGoogleDrive(unittest.TestCase):
     """Test suite validating Google Drive API queries, date ranges, and downloads."""
 
     def setUp(self) -> None:
+        screening = patch("stagesync.intelligence.concert_screen.screen_concert", return_value={"decision": "accept", "reason": "Live concert"})
+        self.screening = screening.start()
+        self.addCleanup(screening.stop)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.token_path = Path(self.temp_dir.name) / "drive_token.json"
         self.client = GoogleDriveClient(
@@ -139,10 +142,8 @@ class TestGoogleDrive(unittest.TestCase):
         self.assertAlmostEqual(v.longitude, -105.2058)
         self.assertEqual(v.processing_status, VideoStatus.DISCOVERED)
 
-        # Verify saved in SQLite DB
         db_v = self.db.get_video_by_source_id("drive_drv_999")
-        self.assertIsNotNone(db_v)
-        self.assertEqual(db_v.id, v.id)
+        self.assertIsNone(db_v)
 
     def test_pipeline_skips_drive_content_duplicate(self) -> None:
         """Verify a second Drive file with identical bytes is not cataloged twice."""
@@ -298,7 +299,7 @@ class TestGoogleDrive(unittest.TestCase):
 
         self.assertEqual([video.filename for video in videos], ["In_Range.MOV"])
 
-    def test_pipeline_accepts_daytime_videos_and_filters_long_videos(self) -> None:
+    def test_pipeline_previews_daytime_and_long_videos(self) -> None:
         coordinator = PipelineCoordinator(db=self.db)
         coordinator.drive_client = MagicMock()
         coordinator.drive_client.list_videos.return_value = (
@@ -339,7 +340,30 @@ class TestGoogleDrive(unittest.TestCase):
 
         videos = coordinator.scan_google_drive(folder_id="folder_abc", dry_run=True)
 
-        self.assertEqual([video.filename for video in videos], ["Daytime_NonConcert.MOV", "Concert.MOV"])
+        self.assertEqual([video.filename for video in videos], ["Long_NonConcert.MOV", "Daytime_NonConcert.MOV", "Concert.MOV"])
+
+    def test_content_screening_blocks_catalog_insertion(self):
+        for decision in ("review", "reject", "accept"):
+            with self.subTest(decision=decision):
+                coordinator = PipelineCoordinator(db=self.db)
+                coordinator.download_dir = Path(self.temp_dir.name)
+                coordinator.drive_client = MagicMock()
+                coordinator.metadata_parser = MagicMock()
+                coordinator.metadata_parser.probe_file.side_effect = RuntimeError("no metadata")
+                coordinator.drive_client.list_videos.return_value = ([{
+                    "id": decision, "name": "clip.mp4", "size": "5000000",
+                    "videoMediaMetadata": {"durationMillis": "1800000"},
+                }], None)
+                def download(file_id, target):
+                    target.write_bytes(file_id.encode())
+                    return target, file_id
+                coordinator.drive_client.download_video.side_effect = download
+                self.screening.return_value = {"decision": decision, "reason": "test evidence"}
+                videos = coordinator.scan_google_drive()
+                self.assertEqual(len(videos), int(decision == "accept"))
+                self.assertEqual(self.db.get_video_by_source_id("drive_" + decision) is not None,
+                                 decision == "accept")
+                self.assertTrue(list((coordinator.download_dir / "screening").glob("*.json")))
 
     def test_is_likely_video_file_filter(self) -> None:
         """Verify is_likely_video_file rejects code, presets, and small false-positives."""

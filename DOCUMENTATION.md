@@ -459,3 +459,19 @@ flowchart TD
    - Create mock fixtures for Google Photos responses, Setlist.fm API payloads, and audio snippets.
    - Implement automated pytest suite covering 100% of EXIF parsing, setlist matching, and title templating.
    - Audit code against Anti-Slop 7 Pillars: no placeholder comments (`// TODO`), strict error handling, and type safety.
+
+## Drive pre-catalog content screening
+
+Live Drive scans download candidates and analyze three eight-second audiovisual samples
+with the configured Gemini model before saving a catalog row. Acceptance requires both
+visual and audio evidence of a live musical performance and model confidence of at least
+0.95. This score is not a measured probability of accuracy. Daytime and long recordings
+are eligible; Drive no longer applies the time-of-day or maximum-duration gate.
+Dry runs return unsaved previews only.
+
+Screening decisions and local media paths are stored in `screening/*.json` beneath the
+configured download directory. Uncertain, rejected, and failed analyses stay outside the
+catalog; local originals are retained. These records are currently file-based, not a
+web review queue. Rescanning retries screening. Existing catalog rows are not cleaned up.
+Missing credentials, malformed responses, and media/API errors never admit a new row.
+Real-world precision still requires evaluation against labeled concert/non-concert clips.
