@@ -28,6 +28,30 @@ class TestScreeningGate(unittest.TestCase):
         self.media.write_bytes(b'retained original')
         self.video = Video(source_photo_id='test', filename='clip.mp4', file_path=str(self.media))
 
+    def test_real_cli_parser_audits_lists_and_retries(self):
+        import contextlib
+        import io
+        import json
+        from stagesync.cli import main
+        self.video.file_path = None
+        self.db.save_video(self.video)
+        commands = [
+            ['stagesync','screening','--audit','--limit','1'],
+            ['stagesync','screening'],
+            ['stagesync','screening','--retry-id',self.video.id],
+            ['stagesync','screening','--audit','--retry-failed'],
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                output = io.StringIO()
+                with patch('stagesync.cli.PipelineCoordinator',return_value=self.coord), patch('sys.argv',command), contextlib.redirect_stdout(output):
+                    main()
+                payload = json.loads(output.getvalue())
+                if isinstance(payload,list):
+                    payload = payload[0]
+                self.assertEqual(payload['video_id'],self.video.id)
+                self.assertEqual(payload['decision'],'review')
+
     def test_uncertain_retry_accepts_without_deleting_original(self):
         with patch('stagesync.intelligence.concert_screen.screen_concert', return_value={'decision':'review','reason':'Missing credentials'}):
             self.assertFalse(self.service.admit(self.video))

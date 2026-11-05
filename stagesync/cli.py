@@ -833,15 +833,15 @@ def cmd_screening(args):
     """Audit is restartable; one durable receipt is committed per candidate."""
     import json
     from stagesync.screening import Screening
-    with PipelineCoordinator() as coordinator:
-        service = Screening(coordinator)
-        if args.retry_id:
-            print(json.dumps(service.retry(args.retry_id)), flush=True)
-        elif args.audit:
-            for result in service.audit(limit=args.limit, retry=args.retry_failed):
-                print(json.dumps(result), flush=True)
-        else:
-            print(json.dumps(service.list(), indent=2), flush=True)
+    coordinator = PipelineCoordinator()
+    service = Screening(coordinator)
+    if args.retry_id:
+        print(json.dumps(service.retry(args.retry_id)), flush=True)
+    elif args.audit:
+        for result in service.audit(limit=args.limit, retry=args.retry_failed):
+            print(json.dumps(result), flush=True)
+    else:
+        print(json.dumps(service.list(), indent=2), flush=True)
 
 
 def main() -> None:
