@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import datetime
 import json
+import hashlib
 import sqlite3
 import threading
 from pathlib import Path
@@ -436,8 +437,22 @@ class Database:
 
     def screening_accepted(self, video_id: str) -> bool:
         row = self._get_connection().execute(
-            "SELECT decision FROM concert_screenings WHERE video_id=?", (video_id,)).fetchone()
-        return bool(row and row['decision'] == 'accept')
+            """SELECT s.decision,s.media_sha256,v.file_path FROM concert_screenings s
+               LEFT JOIN videos v ON v.id=s.video_id WHERE s.video_id=?""", (video_id,)).fetchone()
+        if not row or row['decision'] != 'accept':
+            return False
+        try:
+            with Path(row['file_path'] or '').open('rb') as media:
+                matches = row['media_sha256'] == hashlib.file_digest(media, 'sha256').hexdigest()
+        except OSError:
+            matches = False
+        if not matches:
+            with self.transaction() as cur:
+                cur.execute("""UPDATE concert_screenings SET decision='review',
+                    reason='Accepted media changed or is unavailable; retry screening',updated_at=?
+                    WHERE video_id=? AND decision='accept'""",
+                    (datetime.datetime.now(datetime.timezone.utc).isoformat(), video_id))
+        return matches
 
     def list_videos(self, status: Optional[VideoStatus] = None, limit: int = 100) -> List[Video]:
         """List videos optionally filtered by processing status."""

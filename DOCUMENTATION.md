@@ -454,6 +454,9 @@ malformed responses and provider errors fail closed. Retries reuse retained medi
 rescans can download missing source media again. Classification uses a 15-minute
 lease to prevent concurrent retries, and stale attempts are recoverable. Accepted
 receipts are reused only when the actual media hash still matches on ingestion.
+Processing, approval and publication gates also recheck the file hash, demoting
+changed or missing media to review before allowing work. Library list queries do
+not read media bytes.
 
 Database initialization adds pending screening receipts for all historical rows.
 Library lists and counts exclude anything without an accepted receipt immediately.

@@ -148,5 +148,15 @@ SAMPLE_SHAZAM_PAYLOAD: Dict[str, Any] = {
 
 def accept_fixture(db, video_id):
     """Mark synthetic identity/publishing fixtures as already content-screened."""
+    import hashlib
+    from pathlib import Path
+    video = db.get_video(video_id)
+    media = Path(video.file_path) if video.file_path else db.db_path.parent / (video_id + '.mp4')
+    if not media.is_file():
+        media = db.db_path.parent / (video_id + '.mp4')
+        media.write_bytes(b'accepted synthetic concert fixture')
+    with media.open('rb') as handle:
+        fingerprint = hashlib.file_digest(handle, 'sha256').hexdigest()
     with db.transaction() as cur:
-        cur.execute("UPDATE concert_screenings SET decision='accept',reason='Accepted test fixture' WHERE video_id=?", (video_id,))
+        cur.execute('UPDATE videos SET file_path=? WHERE id=?', (str(media),video_id))
+        cur.execute("UPDATE concert_screenings SET decision='accept',reason='Accepted test fixture',media_sha256=? WHERE video_id=?", (fingerprint,video_id))

@@ -24,6 +24,16 @@ def utcnow():
     return dt.datetime.now(dt.timezone.utc)
 
 
+def screened(method):
+    """Check media before the edit transaction so a held receipt survives rejection."""
+    @functools.wraps(method)
+    def wrapped(self, video_id, *args, **kwargs):
+        if not self.db.screening_accepted(video_id):
+            raise ValueError("Automatic concert screening has not accepted this clip")
+        return method(self, video_id, *args, **kwargs)
+    return wrapped
+
+
 def atomic(method):
     @functools.wraps(method)
     def wrapped(self, *args, **kwargs):
@@ -157,10 +167,9 @@ class Workflow:
                         (json.dumps(state['confirmations']), resolution if field == 'song' else state['resolution'], original_artist if field == 'song' else state['original_artist'], video_id, revision))
         return self.review(video_id)
 
+    @screened
     @atomic
     def approve(self, video_id):
-        if not self.db.screening_accepted(video_id):
-            raise ValueError("Automatic concert screening has not accepted this clip")
         state = self.review(video_id)
         if any(f not in state['confirmations'] for f in FIELDS):
             raise ValueError('Confirm Venue → Show → Artist → Song before approving')
@@ -288,10 +297,9 @@ class Workflow:
                 errors.append('Channel identity unavailable; reconnect YouTube or retry.')
         return channels, errors
 
+    @screened
     @atomic
     def enqueue(self, video_id):
-        if not self.db.screening_accepted(video_id):
-            raise ValueError("Automatic concert screening has not accepted this clip")
         state = self.review(video_id)
         if not state['approved']:
             raise ValueError('Current identity is not approved')

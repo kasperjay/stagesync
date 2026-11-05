@@ -158,6 +158,25 @@ class TestScreeningGate(unittest.TestCase):
                 self.assertEqual(saved.processing_status,VideoStatus.PUBLISHED)
                 self.assertEqual(len(self.coord.db.list_videos()),1)
 
+    def test_replaced_accepted_media_cannot_approve_or_dispatch(self):
+        for operation in ('process','approve','enqueue','claim'):
+            with self.subTest(operation=operation):
+                self.media.write_bytes(b'original concert')
+                with patch('stagesync.intelligence.concert_screen.screen_concert',return_value=ACCEPT):
+                    self.service.admit(self.video)
+                self.media.write_bytes(b'personal replacement footage')
+                workflow = Workflow(self.coord)
+                if operation == 'claim':
+                    self.assertFalse(workflow.claim({'video_id':self.video.id}))
+                else:
+                    with self.assertRaisesRegex(ValueError,'screening'):
+                        if operation == 'process':
+                            self.coord.process_video(self.video)
+                        else:
+                            getattr(workflow,operation)(self.video.id)
+                self.assertEqual(self.db.list_videos(),[])
+                self.assertIn('changed',self.service.list()[0]['reason'])
+
     def test_local_dry_run_leaves_no_receipts_or_catalog(self):
         self.coord.spatial_correlator = MagicMock()
         self.assertEqual(len(self.coord.scan_local_directory(self.root,dry_run=True)),1)
