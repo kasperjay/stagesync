@@ -1,3 +1,4 @@
+from tests.conftest import accept_fixture
 """Unit tests for Google Drive video discovery, querying, downloading, and pipeline ingestion."""
 
 import datetime
@@ -17,7 +18,7 @@ class TestGoogleDrive(unittest.TestCase):
     """Test suite validating Google Drive API queries, date ranges, and downloads."""
 
     def setUp(self) -> None:
-        screening = patch("stagesync.intelligence.concert_screen.screen_concert", return_value={"decision": "accept", "reason": "Live concert"})
+        screening = patch("stagesync.intelligence.concert_screen.screen_concert", return_value={"decision": "accept", "reason": "Live concert", "confidence": .99, "visual_live_performance": True, "audio_live_performance": True})
         self.screening = screening.start()
         self.addCleanup(screening.stop)
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -212,7 +213,7 @@ class TestGoogleDrive(unittest.TestCase):
         videos = coordinator.scan_google_drive(dry_run=False)
 
         self.assertEqual(videos, [])
-        self.assertEqual(len(self.db.list_videos()), 1)
+        self.assertEqual(self.db._get_connection().execute("SELECT COUNT(*) FROM videos").fetchone()[0], 1)
         self.assertFalse((coordinator.download_dir / f"{existing.id}_copy.mp4").exists())
 
     def test_pipeline_continues_after_empty_filtered_drive_page(self) -> None:
@@ -395,12 +396,12 @@ class TestGoogleDrive(unittest.TestCase):
                     target.write_bytes(file_id.encode())
                     return target, file_id
                 coordinator.drive_client.download_video.side_effect = download
-                self.screening.return_value = {"decision": decision, "reason": "test evidence"}
+                self.screening.return_value = {"decision": decision, "reason": "test evidence", "confidence": .99, "visual_live_performance": True, "audio_live_performance": True}
                 videos = coordinator.scan_google_drive()
                 self.assertEqual(len(videos), int(decision == "accept"))
                 self.assertEqual(self.db.get_video_by_source_id("drive_" + decision) is not None,
                                  decision == "accept")
-                self.assertTrue(list((coordinator.download_dir / "screening").glob("*.json")))
+                self.assertIsNotNone(self.db._get_connection().execute("SELECT 1 FROM concert_screenings WHERE source_id=?", ("drive_" + decision,)).fetchone())
 
     def test_is_likely_video_file_filter(self) -> None:
         """Verify is_likely_video_file rejects code, presets, and small false-positives."""

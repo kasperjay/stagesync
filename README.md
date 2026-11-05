@@ -190,3 +190,9 @@ Undated clips are not grouped. Artist and song remain clip-specific; changed
 show context clears setlist verification and requires publication review again.
 Active uploads retain the existing edit lock, so a conflicting update fails
 atomically rather than leaving the date partially synchronized.
+
+All import sources require automatic audiovisual concert screening. Only accepted
+clips appear in the library. Open `/screening` for held recordings, reasons and
+retry controls. Existing unscreened records are retained outside the library until
+`bin/stagesync screening --audit` accepts them; originals and publication history
+are preserved. See DOCUMENTATION.md for restartable audit and scan commands.

@@ -1,3 +1,4 @@
+from tests.conftest import accept_fixture
 import tempfile
 import unittest
 from pathlib import Path
@@ -29,6 +30,7 @@ class TestShortClipFilter(unittest.TestCase):
             )
         )
 
+        accept_fixture(self.db, video.id)
         result = self.coordinator.process_video(video)
 
         self.assertEqual(result.processing_status, VideoStatus.REJECTED)

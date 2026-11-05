@@ -137,7 +137,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
         dir_path = Path(args.dir)
         console.print(f"[bold cyan]Scanning local directory:[/bold cyan] {dir_path}")
         with console.status("[bold green]Ingesting local media files..."):
-            videos = coordinator.scan_local_directory(dir_path)
+            videos = coordinator.scan_local_directory(dir_path, dry_run=args.dry_run)
         console.print(f"[bold green]Discovered {len(videos)} video files.[/bold green]")
         if videos:
             table = Table(title=f"Discovered Local Videos ({len(videos)})", box=box.ROUNDED)
@@ -199,7 +199,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
 
         console.print(f"[bold cyan]Scanning Google Drive ({date_desc}{folder_desc})...[/bold cyan]")
         if args.dry_run:
-            console.print("[yellow]Running in DRY-RUN mode. Videos will be cataloged without downloading binaries.[/yellow]")
+            console.print("[yellow]Running in DRY-RUN mode. Preview only; no files or catalog records will be saved.[/yellow]")
 
         try:
             with console.status("[bold green]Querying Google Drive API..."):
@@ -249,7 +249,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
 
     console.print(f"[bold cyan]Scanning Google Photos ({date_desc})...[/bold cyan]")
     if args.dry_run:
-        console.print("[yellow]Running in DRY-RUN mode. Videos will be cataloged without downloading binaries.[/yellow]")
+        console.print("[yellow]Running in DRY-RUN mode. Preview only; no files or catalog records will be saved.[/yellow]")
 
     try:
         with console.status("[bold green]Querying Google Photos Library API..."):
@@ -829,6 +829,21 @@ def cmd_purge(args: argparse.Namespace) -> None:
     console.print(f"\n[bold green]✓ Removed {len(purged)} Live Photo(s) from catalog.[/bold green]")
 
 
+def cmd_screening(args):
+    """Audit is restartable; one durable receipt is committed per candidate."""
+    import json
+    from stagesync.screening import Screening
+    with PipelineCoordinator() as coordinator:
+        service = Screening(coordinator)
+        if args.retry_id:
+            print(json.dumps(service.retry(args.retry_id)), flush=True)
+        elif args.audit:
+            for result in service.audit(limit=args.limit, retry=args.retry_failed):
+                print(json.dumps(result), flush=True)
+        else:
+            print(json.dumps(service.list(), indent=2), flush=True)
+
+
 def main() -> None:
     """Main CLI entrypoint."""
     parser = argparse.ArgumentParser(
@@ -856,6 +871,13 @@ def main() -> None:
     p_serve.add_argument("--open-browser", action="store_true", help="Automatically open browser")
     p_serve.set_defaults(func=cmd_serve)
 
+    p_screen = subparsers.add_parser("screening", help="List or audit automatic concert screening")
+    p_screen.add_argument("--audit", action="store_true", help="Screen unscreened legacy records")
+    p_screen.add_argument("--retry-failed", action="store_true", help="Also retry uncertain, rejected, or interrupted candidates")
+    p_screen.add_argument("--retry-id", help="Retry a single candidate using retained media")
+    p_screen.add_argument("--limit", type=int, default=0, help="Audit limit; zero means all")
+    p_screen.set_defaults(func=cmd_screening)
+
     # scan
     p_scan = subparsers.add_parser("scan", help="Scan Google Drive, Google Photos, or local directory")
     p_scan.add_argument("--drive", action="store_true", help="Scan videos from Google Drive (Full search API)")
@@ -867,7 +889,7 @@ def main() -> None:
     p_scan.add_argument("--dir", type=str, default=None, help="Local directory path to scan")
     p_scan.add_argument("--picker", action="store_true", help="Launch interactive Google Photos Picker flow")
     p_scan.add_argument("--limit", type=int, default=50, help="Maximum items to scan")
-    p_scan.add_argument("--dry-run", action="store_true", help="Catalog candidates without downloading")
+    p_scan.add_argument("--dry-run", action="store_true", help="Preview candidates without saving or downloading")
     p_scan.set_defaults(func=cmd_scan)
 
     # process

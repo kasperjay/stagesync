@@ -159,6 +159,8 @@ class Workflow:
 
     @atomic
     def approve(self, video_id):
+        if not self.db.screening_accepted(video_id):
+            raise ValueError("Automatic concert screening has not accepted this clip")
         state = self.review(video_id)
         if any(f not in state['confirmations'] for f in FIELDS):
             raise ValueError('Confirm Venue → Show → Artist → Song before approving')
@@ -288,6 +290,8 @@ class Workflow:
 
     @atomic
     def enqueue(self, video_id):
+        if not self.db.screening_accepted(video_id):
+            raise ValueError("Automatic concert screening has not accepted this clip")
         state = self.review(video_id)
         if not state['approved']:
             raise ValueError('Current identity is not approved')
@@ -331,6 +335,9 @@ class Workflow:
         self.refresh_releases(channels)
         for job in self.jobs():
             if len(results) >= limit or job['status'] != 'QUEUED':
+                continue
+            if not self.db.screening_accepted(job['video_id']):
+                self.set_job(job, 'BLOCKED', error_message='Automatic concert screening has not accepted this clip')
                 continue
             state = self.review(job['video_id'])
             if not state['approved'] or state['revision'] != job['revision']:
@@ -393,6 +400,8 @@ class Workflow:
 
     @atomic
     def claim(self, job):
+        if not self.db.screening_accepted(job['video_id']):
+            return False
         state = self.review(job['video_id'])
         if not state['approved'] or state['revision'] != job['revision']:
             return False

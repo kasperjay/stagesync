@@ -15,6 +15,7 @@ from pathlib import Path
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from stagesync.screening import Screening
 from stagesync.config import Settings, get_settings
 from stagesync.database.connection import Database, get_db
 from stagesync.database.models import (
@@ -372,7 +373,15 @@ class PipelineCoordinator:
 
             # Check if video is already recorded
             existing = self.db.get_video_by_source_id(media_id)
-            if existing:
+            if existing and existing.file_path and Path(existing.file_path).is_file():
+                if not dry_run:
+                    Screening(self).admit(existing)
+                continue
+
+            retained = Screening(self).candidate(media_id)
+            if retained and retained.file_path and Path(retained.file_path).is_file():
+                if not dry_run and Screening(self).admit(retained):
+                    discovered_videos.append(self.db.get_video(retained.id) or retained)
                 continue
 
             raw_filename = item.get("filename", f"video_{media_id}.mp4")
@@ -399,7 +408,7 @@ class PipelineCoordinator:
                 )
                 continue
 
-            video = Video(
+            video = existing or Video(
                 source_photo_id=media_id,
                 filename=clean_filename,
                 mime_type=item.get("mimeType", "video/mp4"),
@@ -409,10 +418,12 @@ class PipelineCoordinator:
                 processing_status=VideoStatus.DISCOVERED,
             )
 
+            if retained:
+                video.id = retained.id
+
             if dry_run:
                 video.processing_status = VideoStatus.DISCOVERED
-                saved = self.db.save_video(video)
-                discovered_videos.append(saved)
+                discovered_videos.append(video)
                 continue
 
             # Live download
@@ -421,7 +432,6 @@ class PipelineCoordinator:
                 local_dir.mkdir(parents=True, exist_ok=True)
                 target_file = validate_safe_path(local_dir, local_dir / f"{media_id}_{clean_filename}")
                 try:
-                    self.db.update_video_status(video.id, VideoStatus.DOWNLOADING)
                     file_path, sha_hash = self.photos_client.download_video(base_url, target_file)
                     video.file_path = str(file_path)
                     video.file_hash_sha256 = sha_hash
@@ -441,8 +451,10 @@ class PipelineCoordinator:
                     logger.error("Download failed for %s: %s", media_id, e)
                     video.processing_status = VideoStatus.FAILED
 
-            saved = self.db.save_video(video)
-            discovered_videos.append(saved)
+            if dry_run:
+                discovered_videos.append(video)
+            elif Screening(self).admit(video):
+                discovered_videos.append(self.db.get_video(video.id) or video)
 
         return discovered_videos
 
@@ -459,8 +471,15 @@ class PipelineCoordinator:
                 continue
 
             existing = self.db.get_video_by_source_id(media_id)
-            if existing:
-                discovered_videos.append(existing)
+            if existing and existing.file_path and Path(existing.file_path).is_file():
+                if not dry_run and Screening(self).admit(existing):
+                    discovered_videos.append(existing)
+                continue
+
+            retained = Screening(self).candidate(media_id)
+            if retained and retained.file_path and Path(retained.file_path).is_file():
+                if not dry_run and Screening(self).admit(retained):
+                    discovered_videos.append(self.db.get_video(retained.id) or retained)
                 continue
 
             raw_filename = item.get("filename", f"picker_video_{media_id}.mp4")
@@ -487,7 +506,7 @@ class PipelineCoordinator:
                 )
                 continue
 
-            video = Video(
+            video = existing or Video(
                 source_photo_id=media_id,
                 filename=clean_filename,
                 mime_type=item.get("mimeType", "video/mp4"),
@@ -497,12 +516,14 @@ class PipelineCoordinator:
                 processing_status=VideoStatus.DISCOVERED,
             )
 
+            if retained:
+                video.id = retained.id
+
             if dry_run or not base_url:
                 video.processing_status = VideoStatus.DISCOVERED
             else:
                 target_file = self.download_dir / f"{video.id}_{clean_filename}"
                 try:
-                    self.db.update_video_status(video.id, VideoStatus.DOWNLOADING)
                     file_path, sha_hash = self.photos_client.download_video(base_url, target_file)
                     video.file_path = str(file_path)
                     video.file_hash_sha256 = sha_hash
@@ -522,8 +543,10 @@ class PipelineCoordinator:
                     logger.error("Download failed for picker item %s: %s", media_id, e)
                     video.processing_status = VideoStatus.FAILED
 
-            saved = self.db.save_video(video)
-            discovered_videos.append(saved)
+            if dry_run:
+                discovered_videos.append(video)
+            elif Screening(self).admit(video):
+                discovered_videos.append(self.db.get_video(video.id) or video)
 
         return discovered_videos
 
@@ -560,7 +583,7 @@ class PipelineCoordinator:
         page_token: Optional[str] = None
         all_items: List[Dict[str, Any]] = []
 
-        scan_all_matching_items = bool(clean_folder or (parsed_start and parsed_end))
+        scan_all_matching_items = bool(limit <= 0 or clean_folder or (parsed_start and parsed_end))
 
         try:
             while scan_all_matching_items or len(all_items) < target_limit:
@@ -609,10 +632,9 @@ class PipelineCoordinator:
             source_id = f"drive_{file_id}"
             existing = self.db.get_video_by_source_id(source_id)
             if existing:
-                if existing.processing_status == VideoStatus.REJECTED:
-                    continue
-                # If already downloaded and available locally, skip
                 if existing.file_path and Path(existing.file_path).exists():
+                    if not dry_run and Screening(self).admit(existing):
+                        discovered_videos.append(existing)
                     continue
                 # If running a dry-run and already cataloged, skip
                 if dry_run:
@@ -684,13 +706,19 @@ class PipelineCoordinator:
                     processing_status=VideoStatus.DISCOVERED,
                 )
 
+            retained = Screening(self).candidate(source_id)
+            if retained and retained.file_path and Path(retained.file_path).is_file():
+                if not dry_run and Screening(self).admit(retained):
+                    discovered_videos.append(self.db.get_video(retained.id) or retained)
+                continue
+            if retained:
+                video.id = retained.id
             if dry_run:
                 discovered_videos.append(video)
                 continue
             else:
                 target_file = self.download_dir / f"{video.id}_{clean_filename}"
                 try:
-                    self.db.update_video_status(video.id, VideoStatus.DOWNLOADING)
                     file_path, sha_hash = self.drive_client.download_video(file_id, target_file)
                     video.file_path = str(file_path)
                     video.file_hash_sha256 = sha_hash
@@ -721,6 +749,7 @@ class PipelineCoordinator:
                         continue
                 except Exception as e:
                     logger.error("Download failed for Drive file %s: %s", file_id, e)
+                    Screening(self).admit(video)
                     continue
 
                 if parsed_start and parsed_end:
@@ -735,28 +764,10 @@ class PipelineCoordinator:
                         )
                         continue
 
-                from stagesync.intelligence.concert_screen import screen_concert
-                from stagesync.security import secure_save_json
-
-                result = screen_concert(Path(video.file_path))
-                screening_dir = self.download_dir / "screening"
-                screening_dir.mkdir(parents=True, exist_ok=True)
-                secure_save_json(screening_dir / f"{video.id}.json", {
-                    "source_id": source_id,
-                    "filename": clean_filename,
-                    "file_path": video.file_path,
-                    "result": result,
-                })
-                if result["decision"] != "accept":
-                    logger.info("Drive content screening %s: %s (%s)",
-                                result["decision"], clean_filename, result["reason"])
-                    if progress_callback:
-                        progress_callback(item_index, len(all_items),
-                                          f"Content screening {result['decision']}: {clean_filename}")
-                    continue
-
-            saved = self.db.save_video(video)
-            discovered_videos.append(saved)
+            if dry_run:
+                discovered_videos.append(video)
+            elif Screening(self).admit(video):
+                discovered_videos.append(self.db.get_video(video.id) or video)
 
         return discovered_videos
 
@@ -764,6 +775,7 @@ class PipelineCoordinator:
         self,
         directory_path: Union[str, Path],
         progress_callback: Optional[ProgressCallback] = None,
+        dry_run: bool = False,
     ) -> List[Video]:
         """Scan a local directory for video files and ingest into pipeline."""
         target_dir = Path(directory_path).resolve()
@@ -788,9 +800,18 @@ class PipelineCoordinator:
                 progress_callback(video_index, len(video_paths), f"Processing local video {video_index} of {len(video_paths)}")
             if p.is_file() and p.suffix.lower() in video_extensions:
                 source_id = f"local_{hashlib.md5(str(p).encode()).hexdigest()[:16]}"
+                if dry_run:
+                    found_videos.append(Video(source_photo_id=source_id, filename=p.name, file_path=str(p)))
+                    continue
                 existing = self.db.get_video_by_source_id(source_id)
                 if existing:
-                    found_videos.append(existing)
+                    if Screening(self).admit(existing):
+                        found_videos.append(existing)
+                    continue
+                retained = Screening(self).candidate(source_id)
+                if retained:
+                    if Screening(self).admit(retained):
+                        found_videos.append(self.db.get_video(retained.id) or retained)
                     continue
 
                 v = Video(
@@ -852,8 +873,8 @@ class PipelineCoordinator:
                         v.device_make = v.device_make or corr.device_make
                         v.device_model = v.device_model or corr.device_model
 
-                saved = self.db.save_video(v)
-                found_videos.append(saved)
+                if Screening(self).admit(v):
+                    found_videos.append(self.db.get_video(v.id) or v)
 
         return found_videos
 
@@ -863,6 +884,8 @@ class PipelineCoordinator:
 
     def process_video(self, video: Video) -> Video:
         """Execute end-to-end intelligence pipeline on a single video entity."""
+        if not self.db.screening_accepted(video.id):
+            raise ValueError("Automatic concert screening must accept this clip before processing")
         logger.info("Starting processing pipeline for video %s (%s)", video.id, video.filename)
 
         if self._is_short_clip(video.duration_seconds):

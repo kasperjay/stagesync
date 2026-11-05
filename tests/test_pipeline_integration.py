@@ -1,3 +1,4 @@
+from tests.conftest import accept_fixture
 """End-to-End Pipeline Integration Tests.
 
 Validates end-to-end relational data flow:
@@ -50,6 +51,7 @@ class TestPipelineIntegration(unittest.TestCase):
             processing_status=VideoStatus.DISCOVERED,
         )
         saved_video = self.db.save_video(video)
+        accept_fixture(self.db, video.id)
         self.assertEqual(saved_video.processing_status, VideoStatus.DISCOVERED)
 
         # 2. Metadata Extraction from Container
@@ -213,6 +215,7 @@ class TestPipelineIntegration(unittest.TestCase):
             processing_status=VideoStatus.PENDING_REVIEW,
         )
         self.db.save_video(video)
+        accept_fixture(self.db, video.id)
         ident = Identification(
             video_id=video.id,
             detected_song_title="Dragon",

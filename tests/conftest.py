@@ -144,3 +144,9 @@ SAMPLE_SHAZAM_PAYLOAD: Dict[str, Any] = {
         ],
     },
 }
+
+
+def accept_fixture(db, video_id):
+    """Mark synthetic identity/publishing fixtures as already content-screened."""
+    with db.transaction() as cur:
+        cur.execute("UPDATE concert_screenings SET decision='accept',reason='Accepted test fixture' WHERE video_id=?", (video_id,))

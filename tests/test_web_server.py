@@ -1,3 +1,4 @@
+from tests.conftest import accept_fixture
 """Unit tests for StageSync Web Dashboard & REST Server."""
 
 import unittest
@@ -830,6 +831,7 @@ class TestWebServerApproveRealCoordinator(AioHTTPTestCase):
         """Legacy approval calls cannot bypass field confirmation or queue uploads."""
         video = Video(id="v_real_1",source_photo_id="sp_real_1",filename="IMG_6147.MOV",duration_seconds=52,processing_status=VideoStatus.PENDING_REVIEW)
         self.real_db.save_video(video)
+        accept_fixture(self.real_db, video.id)
         response = await self.client.post('/api/video/v_real_1/approve',json={'title':'Publishing title','privacy':'PUBLIC'})
         self.assertEqual(response.status,404)
         payload = await response.json()

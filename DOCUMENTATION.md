@@ -438,28 +438,54 @@ The aiohttp homepage serves `stagesync/web/index.html`; its navigation embeds
 and archive controls. `stagesync/web/workflow.py` registers workflow API routes. Existing scanning, media playback and source integrations remain
 in place. Counts and errors are sourced from the catalog and persisted publication jobs.
 
-## Drive pre-catalog content screening
+## Mandatory concert screening
 
-Folder scans enumerate every descendant folder and every files.list page, then
-apply video validation locally. They do not combine parent folders in a single
-Drive search or impose a depth/folder-count cutoff. Continuation tokens carry
-the remaining folders and the current Google page token; empty filtered pages
-must still be followed. Folder-list failures surface instead of silently
-reporting an empty folder.
+Every live import from Drive, Photos Library, Photos Picker, or local directories
+passes the same audiovisual gate. Dry runs are unsaved previews. Drive folder
+scans enumerate all descendant folders and pages, including empty filtered pages.
+Daytime and long recordings remain eligible. Acceptance requires visual and audio
+evidence of live musical performance and model confidence of at least 0.95; the
+score is not a measured probability of accuracy.
 
-Live Drive scans download candidates and analyze three eight-second audiovisual samples
-with the configured Gemini model before saving a catalog row. Acceptance requires both
-visual and audio evidence of a live musical performance and model confidence of at least
-0.95. This score is not a measured probability of accuracy. Daytime and long recordings
-are eligible; Drive no longer applies the time-of-day or maximum-duration gate.
-Dry runs return unsaved previews only.
+`concert_screenings` persists source IDs, retained media snapshots, decision, reason,
+attempt count, timestamps and SHA256 binding in SQLite. New uncertain, rejected or
+failed candidates do not enter `videos`. Missing credentials, missing media,
+malformed responses and provider errors fail closed. Retries reuse retained media;
+rescans can download missing source media again. Classification uses a 15-minute
+lease to prevent concurrent retries, and stale attempts are recoverable. Accepted
+receipts are reused only when the actual media hash still matches on ingestion.
 
-Screening decisions and local media paths are stored in `screening/*.json` beneath the
-configured download directory. Uncertain, rejected, and failed analyses stay outside the
-catalog; local originals are retained. These records are currently file-based, not a
-web review queue. Rescanning retries screening. Existing catalog rows are not cleaned up.
-Missing credentials, malformed responses, and media/API errors never admit a new row.
-Real-world precision still requires evaluation against labeled concert/non-concert clips.
+Database initialization adds pending screening receipts for all historical rows.
+Library lists and counts exclude anything without an accepted receipt immediately.
+Historical rows, original files, identifications, user edits and publication history
+are retained. Processing, approval, enqueue and dispatch enforce acceptance; a
+held queued publication is blocked and must be explicitly queued again after
+screening and review. Acceptance alone never grants identity or publishing consent.
+
+Open `/screening` (linked from the workspace navigation) for decisions, reasons and
+per-record retries. The API is `GET /api/screening` and
+`POST /api/screening/{video_id}/retry`. Missing-media retries explain that a source
+rescan or restored file is needed; expired Photos URLs are never persisted.
+
+```bash
+# List receipts and reasons
+bin/stagesync screening
+# Audit all previously unscreened rows; commits and prints each result immediately
+bin/stagesync screening --audit
+# Resume an interrupted audit: pending and stale in-progress receipts are retried
+bin/stagesync screening --audit
+# Also retry previously uncertain/rejected/failed analyses
+bin/stagesync screening --audit --retry-failed
+bin/stagesync screening --retry-id VIDEO_ID
+# Run full Drive folder scan (0 means no candidate limit)
+bin/stagesync scan --drive --drive-folder FOLDER_ID --limit 0
+```
+
+Run long scans/audits under the host process supervisor or a detached shell with
+stdout/stderr redirected to a log. Restarting an audit does not repeat completed
+classifications unless `--retry-failed` is supplied. The migration performs no
+network calls; audit performs bounded FFmpeg and Gemini calls per candidate.
+Real-world precision still requires evaluation against labeled footage.
 
 The root `index.html` shell preserves the approved visual design and loads actual
 workflow counts and show summaries. Its `/workspace` frame preserves catalog

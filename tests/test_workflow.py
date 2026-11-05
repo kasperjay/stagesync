@@ -1,3 +1,4 @@
+from tests.conftest import accept_fixture
 """Regression checks for independent identity and publishing consent."""
 import datetime as dt
 import tempfile
@@ -21,6 +22,7 @@ class TestWorkflow(unittest.TestCase):
         self.workflow = Workflow(self.coord)
         self.video = Video(source_photo_id='test',filename='clip.mp4',duration_seconds=50,processing_status=VideoStatus.PENDING_REVIEW)
         self.db.save_video(self.video)
+        accept_fixture(self.db, self.video.id)
         venue = Venue(name='Venue',city='Austin',country_code='US',latitude=30,longitude=-97)
         self.db.save_venue(venue)
         concert = Concert(venue_id=venue.id,headliner_artist='Marzomets',lineup_artists=['Marzomets','Selected Artist'],event_date='2014-06-13')

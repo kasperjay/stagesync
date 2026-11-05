@@ -238,6 +238,26 @@ class Database:
             conn = self._get_connection()
             with conn:
                 conn.executescript(_SCHEMA_SQL)
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS concert_screenings (
+                    video_id TEXT PRIMARY KEY, source_id TEXT UNIQUE NOT NULL,
+                    filename TEXT NOT NULL, video_json TEXT NOT NULL,
+                    decision TEXT NOT NULL DEFAULT 'pending', reason TEXT NOT NULL,
+                    result_json TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL, lease TEXT, media_sha256 TEXT
+                );
+                CREATE INDEX IF NOT EXISTS screening_decision ON concert_screenings(decision);
+            """)
+            if 'media_sha256' not in {r['name'] for r in conn.execute('PRAGMA table_info(concert_screenings)')}:
+                conn.execute('ALTER TABLE concert_screenings ADD COLUMN media_sha256 TEXT')
+            # Migration is additive: keep every original row and all related history.
+            with conn:
+                for row in conn.execute("SELECT * FROM videos").fetchall():
+                    video = self._row_to_video(row)
+                    conn.execute("""INSERT OR IGNORE INTO concert_screenings
+                        (video_id,source_id,filename,video_json,decision,reason,updated_at)
+                        VALUES (?,?,?,?,'pending','Legacy record requires automatic concert screening',?)""",
+                        (video.id,video.source_photo_id,video.filename,video.model_dump_json(),video.updated_at))
             if str(self.db_path) != ":memory:" and self.db_path.exists():
                 enforce_file_permissions(self.db_path, 0o600)
 
@@ -317,6 +337,10 @@ class Database:
         }
         with self.transaction() as cur:
             cur.execute(sql, params)
+            cur.execute("""INSERT OR IGNORE INTO concert_screenings
+                (video_id,source_id,filename,video_json,decision,reason,updated_at)
+                VALUES (?,?,?,?,'pending','Awaiting automatic concert screening',?)""",
+                (video.id,video.source_photo_id,video.filename,video.model_dump_json(),now))
             concert_id = self._date_concert(video.id)
             if concert_id:
                 self._conform_date(video.id, concert_id, now)
@@ -410,14 +434,19 @@ class Database:
                 cur.execute("DELETE FROM videos WHERE id = :id", {"id": vid_id})
         return purged
 
+    def screening_accepted(self, video_id: str) -> bool:
+        row = self._get_connection().execute(
+            "SELECT decision FROM concert_screenings WHERE video_id=?", (video_id,)).fetchone()
+        return bool(row and row['decision'] == 'accept')
+
     def list_videos(self, status: Optional[VideoStatus] = None, limit: int = 100) -> List[Video]:
         """List videos optionally filtered by processing status."""
         conn = self._get_connection()
         if status:
-            sql = "SELECT * FROM videos WHERE processing_status = :status ORDER BY created_at DESC LIMIT :limit"
+            sql = "SELECT * FROM videos WHERE processing_status = :status AND id IN (SELECT video_id FROM concert_screenings WHERE decision='accept') ORDER BY created_at DESC LIMIT :limit"
             rows = conn.execute(sql, {"status": status.value, "limit": limit}).fetchall()
         else:
-            sql = "SELECT * FROM videos ORDER BY created_at DESC LIMIT :limit"
+            sql = "SELECT * FROM videos WHERE id IN (SELECT video_id FROM concert_screenings WHERE decision='accept') ORDER BY created_at DESC LIMIT :limit"
             rows = conn.execute(sql, {"limit": limit}).fetchall()
         return [self._row_to_video(r) for r in rows]
 
