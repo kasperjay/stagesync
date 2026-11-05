@@ -440,6 +440,13 @@ in place. Counts and errors are sourced from the catalog and persisted publicati
 
 ## Drive pre-catalog content screening
 
+Folder scans enumerate every descendant folder and every files.list page, then
+apply video validation locally. They do not combine parent folders in a single
+Drive search or impose a depth/folder-count cutoff. Continuation tokens carry
+the remaining folders and the current Google page token; empty filtered pages
+must still be followed. Folder-list failures surface instead of silently
+reporting an empty folder.
+
 Live Drive scans download candidates and analyze three eight-second audiovisual samples
 with the configured Gemini model before saving a catalog row. Acceptance requires both
 visual and audio evidence of a live musical performance and model confidence of at least

@@ -33,6 +33,43 @@ class TestGoogleDrive(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
+    @patch.object(GoogleDriveClient, "get_access_token", return_value="token")
+    @patch("requests.get")
+    def test_folder_pages_continue_after_empty_page_and_across_all_folders(self, get, token):
+        response = MagicMock(status_code=200)
+        response.json.side_effect = [
+            {"files": [], "nextPageToken": "page2"},
+            {"files": []},
+            {"files": [{"id": "video", "name": "show.MOV", "size": "5000000"}]},
+        ]
+        get.return_value = response
+        with patch.object(self.client, "get_subfolder_ids", return_value=["child"]):
+            items, cursor = self.client.list_videos(folder_id="root")
+            self.assertEqual(items, [])
+            items, cursor = self.client.list_videos(folder_id="root", page_token=cursor)
+            self.assertEqual(get.call_args.kwargs["params"]["pageToken"], "page2")
+            self.assertIsNotNone(cursor)
+            items, cursor = self.client.list_videos(folder_id="root", page_token=cursor)
+        self.assertIn("'child' in parents", get.call_args.kwargs["params"]["q"])
+        self.assertEqual(items[0]["id"], "video")
+        self.assertIsNone(cursor)
+
+    @patch.object(GoogleDriveClient, "get_access_token", return_value="token")
+    @patch("requests.get")
+    def test_subfolders_paginate_recurse_and_deduplicate(self, get, token):
+        response = MagicMock(status_code=200)
+        response.json.side_effect = [
+            {"files": [{"id": "a"}], "nextPageToken": "more"},
+            {"files": [{"id": "b"}]},
+            {"files": [{"id": "c"}]},
+            {"files": []},
+            {"files": [{"id": "d"}, {"id": "root"}]},
+            {"files": []},
+        ]
+        get.return_value = response
+        self.assertEqual(self.client.get_subfolder_ids("root"), ["a", "b", "c", "d"])
+        self.assertEqual(get.call_args_list[1].kwargs["params"]["pageToken"], "more")
+
     def test_parse_date_formats(self) -> None:
         """Verify date strings are parsed into datetime.date."""
         d = _parse_date("2024-07-20")
@@ -76,7 +113,7 @@ class TestGoogleDrive(unittest.TestCase):
         call_args, call_kwargs = mock_get.call_args
         params = call_kwargs["params"]
         query = params["q"]
-        self.assertIn("mimeType contains 'video/'", query)
+        self.assertNotIn("mimeType contains", query)
         self.assertIn("'folder_abc' in parents", query)
         self.assertIn("trashed = false", query)
         self.assertNotIn("createdTime >=", query)

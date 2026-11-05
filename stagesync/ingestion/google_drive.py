@@ -358,40 +358,44 @@ class GoogleDriveClient:
         self._save_token_data(fresh)
         return fresh["access_token"]
 
-    def get_subfolder_ids(self, parent_folder_id: str, max_depth: int = 2) -> List[str]:
-        """Fetch all subfolder IDs under parent folder up to max_depth."""
+    def get_subfolder_ids(self, parent_folder_id: str, max_depth: Optional[int] = None) -> List[str]:
         clean_parent = extract_folder_id(parent_folder_id)
         if not clean_parent:
             return []
-
-        all_folders: List[str] = []
-        queue = [clean_parent]
-        current_depth = 0
-
-        while queue and current_depth < max_depth:
-            current_depth += 1
-            next_queue = []
-            for pid in queue:
-                try:
-                    access_token = self.get_access_token()
-                    headers = {"Authorization": f"Bearer {access_token}"}
-                    params = {
-                        "q": f"mimeType = 'application/vnd.google-apps.folder' and '{pid}' in parents and trashed = false",
-                        "pageSize": 50,
-                        "fields": "files(id, name)",
-                        "supportsAllDrives": "true",
-                        "includeItemsFromAllDrives": "true",
-                    }
-                    res = requests.get(f"{GOOGLE_DRIVE_API_BASE}/files", headers=headers, params=params, timeout=15)
-                    if res.status_code == 200:
-                        child_ids = [f["id"] for f in res.json().get("files", []) if f.get("id")]
-                        all_folders.extend(child_ids)
-                        next_queue.extend(child_ids)
-                except Exception as e:
-                    logger.debug("Failed checking subfolders for %s: %s", pid, e)
-            queue = next_queue
-
-        return all_folders
+        folders = []
+        seen = {clean_parent}
+        queue = [(clean_parent, 0)]
+        for parent, depth in queue:
+            if max_depth is not None and depth >= max_depth:
+                continue
+            page = None
+            while True:
+                params = {
+                    "q": f"mimeType = 'application/vnd.google-apps.folder' and '{parent}' in parents and trashed = false",
+                    "pageSize": 1000,
+                    "fields": "nextPageToken, files(id)",
+                    "supportsAllDrives": "true",
+                    "includeItemsFromAllDrives": "true",
+                }
+                if page:
+                    params["pageToken"] = page
+                headers = {"Authorization": f"Bearer {self.get_access_token()}"}
+                response = requests.get(f"{GOOGLE_DRIVE_API_BASE}/files", headers=headers, params=params, timeout=25)
+                if response.status_code == 401:
+                    headers["Authorization"] = f"Bearer {self.get_access_token(force_refresh=True)}"
+                    response = requests.get(f"{GOOGLE_DRIVE_API_BASE}/files", headers=headers, params=params, timeout=25)
+                response.raise_for_status()
+                data = response.json()
+                for folder in data.get("files", []):
+                    fid = folder["id"]
+                    if fid not in seen:
+                        seen.add(fid)
+                        folders.append(fid)
+                        queue.append((fid, depth + 1))
+                page = data.get("nextPageToken")
+                if not page:
+                    break
+        return folders
 
     def list_videos(
         self,
@@ -410,20 +414,20 @@ class GoogleDriveClient:
 
         query_parts: List[str] = ["trashed = false"]
 
-        # Scope search to video MIME types or common video container filenames
-        video_clause = "(mimeType contains 'video/' or name contains '.mp4' or name contains '.mov' or name contains '.m4v' or name contains '.mkv')"
-        query_parts.append(video_clause)
-
         clean_folder = extract_folder_id(folder_id)
+        target_folders = []
         if clean_folder:
-            # Query parent folder and subfolders
-            subfolders = self.get_subfolder_ids(clean_folder)
-            target_folders = [clean_folder] + subfolders
-            if len(target_folders) == 1:
-                query_parts.append(f"'{clean_folder}' in parents")
+            if page_token:
+                cursor = json.loads(page_token)
+                if cursor["root"] != clean_folder:
+                    raise ValueError("Drive page token belongs to another folder")
+                target_folders = cursor["folders"]
+                page_token = cursor["page"]
             else:
-                parent_clauses = " or ".join(f"'{fid}' in parents" for fid in target_folders[:30])
-                query_parts.append(f"({parent_clauses})")
+                target_folders = [clean_folder] + self.get_subfolder_ids(clean_folder)
+            query_parts.append(f"'{target_folders[0]}' in parents")
+        else:
+            query_parts.append("(mimeType contains 'video/' or name contains '.mp4' or name contains '.mov' or name contains '.m4v' or name contains '.mkv')")
 
         full_query = " and ".join(query_parts)
         logger.info("Executing Google Drive search query: %s", full_query)
@@ -468,6 +472,10 @@ class GoogleDriveClient:
             len(filtered_items),
         )
         next_token = data.get("nextPageToken")
+        if clean_folder:
+            if not next_token:
+                target_folders = target_folders[1:]
+            next_token = json.dumps({"root": clean_folder, "folders": target_folders, "page": next_token}) if target_folders else None
         return filtered_items, next_token
 
     def get_file_metadata(
