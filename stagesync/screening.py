@@ -1,7 +1,8 @@
 """Durable, fail-closed admission gate shared by every ingestion source.
 
 Rejected candidates never need a catalog row. Legacy rows stay intact for history,
-but library queries require a current accepted screening receipt.
+but untagged library entries require an accepted screening receipt.
+Saved identification records exempt tagged videos without rewriting receipts.
 """
 import datetime as dt
 import json
@@ -20,7 +21,7 @@ class Screening:
         self.db = coordinator.db
 
     def accepted(self, video_id):
-        return self.db.screening_accepted(video_id)
+        return self.db.library_eligible(video_id)
 
     def admit(self, video, retry=False):
         fingerprint = None
@@ -36,6 +37,8 @@ class Screening:
             with self.db.transaction() as cur:
                 cur.execute("""UPDATE videos SET file_path=?,file_hash_sha256=?,file_size_bytes=?
                     WHERE id=?""", (video.file_path, fingerprint, Path(video.file_path).stat().st_size, video.id))
+        if self.db.has_saved_tags(video.id):
+            return True
         receipt = self.db._get_connection().execute(
             'SELECT decision,media_sha256 FROM concert_screenings WHERE video_id=?', (video.id,)).fetchone()
         if receipt and receipt['decision'] == 'accept' and fingerprint and receipt['media_sha256'] == fingerprint:
@@ -105,10 +108,12 @@ class Screening:
 
     def list(self):
         return [dict(r) for r in self.db._get_connection().execute(
-            'SELECT video_id,source_id,filename,decision,reason,attempts,updated_at FROM concert_screenings ORDER BY updated_at DESC')]
+            '''SELECT video_id,source_id,filename,decision,reason,attempts,updated_at,
+               EXISTS(SELECT 1 FROM identifications i WHERE i.video_id=concert_screenings.video_id) AS exempt
+               FROM concert_screenings ORDER BY updated_at DESC''')]
 
     def audit(self, limit=0, retry=False):
-        rows = self.list()
+        rows = [row for row in self.list() if not row['exempt']]
         cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=15)).isoformat()
         candidates = [r for r in rows if r['decision'] == 'pending' or
                       (r['decision'] == 'screening' and r['updated_at'] < cutoff) or

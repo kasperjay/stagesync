@@ -132,7 +132,7 @@ def register(app, coordinator_key):
     async def overview(request):
         workflow = service(request)
         conn = workflow.db._get_connection()
-        counts = {r['processing_status']:r['count'] for r in conn.execute('SELECT processing_status,COUNT(*) count FROM videos WHERE id IN (SELECT video_id FROM concert_screenings WHERE decision=\'accept\') GROUP BY processing_status')}
+        counts = workflow.db.library_status_counts()
         jobs = workflow.jobs()
         shows = {}
         unassigned = []
@@ -158,7 +158,7 @@ def register(app, coordinator_key):
                 unassigned.append(dict(id=video.id,filename=video.filename,status=video.processing_status.value))
         jobs = workflow.jobs()
         history = [dict(r) for r in conn.execute("SELECT video_id,youtube_url,upload_status,uploaded_at,title FROM youtube_uploads WHERE youtube_video_id IS NOT NULL")]
-        counts = {r['processing_status']:r['count'] for r in conn.execute('SELECT processing_status,COUNT(*) count FROM videos WHERE id IN (SELECT video_id FROM concert_screenings WHERE decision=\'accept\') GROUP BY processing_status')}
+        counts = workflow.db.library_status_counts()
         events = [dict(r) for r in conn.execute('SELECT video_id,step_name,status,error_log,started_at FROM pipeline_runs ORDER BY started_at DESC LIMIT 100')]
         return web.json_response(dict(unassigned=unassigned, events=events, counts=counts, shows=list(shows.values()), jobs=jobs, legacy_history=history, flagged=flagged,
                                      detected_shows=len(shows), verified_matches=verified, approved_clips=approved,

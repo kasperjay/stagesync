@@ -559,6 +559,7 @@ class PipelineCoordinator:
         dry_run: bool = False,
         limit: int = 50,
         progress_callback: Optional[ProgressCallback] = None,
+        only_new: bool = False,
     ) -> List[Video]:
         """Scan Google Drive for video files matching date range and catalog discoveries."""
         clean_folder = extract_folder_id(folder_id)
@@ -631,6 +632,8 @@ class PipelineCoordinator:
 
             source_id = f"drive_{file_id}"
             existing = self.db.get_video_by_source_id(source_id)
+            if only_new and (existing or Screening(self).candidate(source_id)):
+                continue
             if existing:
                 if existing.file_path and Path(existing.file_path).exists():
                     if not dry_run and Screening(self).admit(existing):
@@ -884,7 +887,7 @@ class PipelineCoordinator:
 
     def process_video(self, video: Video) -> Video:
         """Execute end-to-end intelligence pipeline on a single video entity."""
-        if not self.db.screening_accepted(video.id):
+        if not self.db.library_eligible(video.id):
             raise ValueError("Automatic concert screening must accept this clip before processing")
         logger.info("Starting processing pipeline for video %s (%s)", video.id, video.filename)
 
@@ -1358,6 +1361,8 @@ class PipelineCoordinator:
 
         processed = []
         for v in candidates:
+            if not reprocess and not target_status and self.db.has_saved_tags(v.id):
+                continue
             if self._is_short_clip(v.duration_seconds):
                 v.processing_status = VideoStatus.REJECTED
                 self.db.save_video(v)

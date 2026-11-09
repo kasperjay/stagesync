@@ -440,8 +440,9 @@ in place. Counts and errors are sourced from the catalog and persisted publicati
 
 ## Mandatory concert screening
 
-Every live import from Drive, Photos Library, Photos Picker, or local directories
-passes the same audiovisual gate. Dry runs are unsaved previews. Drive folder
+Every new untagged import from Drive, Photos Library, Photos Picker, or local
+directories passes the same audiovisual gate. Saved identification records, including
+partial artist tags, exempt a video from screening without altering screening history. Dry runs are unsaved previews. Drive folder
 scans enumerate all descendant folders and pages, including empty filtered pages.
 Daytime and long recordings remain eligible. Acceptance requires visual and audio
 evidence of live musical performance and model confidence of at least 0.95; the
@@ -454,14 +455,16 @@ malformed responses and provider errors fail closed. Retries reuse retained medi
 rescans can download missing source media again. Classification uses a 15-minute
 lease to prevent concurrent retries, and stale attempts are recoverable. Accepted
 receipts are reused only when the actual media hash still matches on ingestion.
-Processing, approval and publication gates also recheck the file hash, demoting
+For untagged clips, processing, approval and publication gates recheck the file hash, demoting
 changed or missing media to review before allowing work. Library list queries do
 not read media bytes.
 
 Database initialization adds pending screening receipts for all historical rows.
-Library lists and counts exclude anything without an accepted receipt immediately.
+Library lists and counts include saved identifications regardless of screening outcome;
+untagged videos require an accepted receipt.
 Historical rows, original files, identifications, user edits and publication history
-are retained. Processing, approval, enqueue and dispatch enforce acceptance; a
+are retained. Processing, approval, enqueue and dispatch allow tagged clips or enforce
+screening acceptance for untagged clips; a
 held queued publication is blocked and must be explicitly queued again after
 screening and review. Acceptance alone never grants identity or publishing consent.
 
@@ -515,3 +518,16 @@ resolution accepts `--original-artist`. Draft edits must include valid destinati
 and metadata before enqueue. Local schedule input is interpreted in America/Chicago;
 nonexistent spring-forward times are rejected and the repeated autumn hour provides
 an explicit first/second occurrence choice.
+
+
+## Drive continuous monitoring
+
+The managed `stagesync-drive-monitor` process runs `bin/stagesync daemon --interval 60`.
+It scans Google Drive, never Photos, across all candidate pages each cycle. Optional
+`STAGESYNC_DRIVE_WATCH_FOLDER` or `daemon --drive-folder` restricts it to a recursive
+folder tree; the default is all accessible Drive videos. Previously cataloged and
+screened source IDs are skipped to avoid repeated downloads/classification. Held
+or rejected items require an explicit screening retry or manual rescan. New accepted
+videos proceed through automatic identification; saved tags are not automatically
+reprocessed. Upload dispatch remains off unless `--auto-upload` is explicitly used,
+and even then only explicitly queued publication jobs are eligible.

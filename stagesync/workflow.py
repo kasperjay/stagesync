@@ -28,7 +28,7 @@ def screened(method):
     """Check media before the edit transaction so a held receipt survives rejection."""
     @functools.wraps(method)
     def wrapped(self, video_id, *args, **kwargs):
-        if not self.db.screening_accepted(video_id):
+        if not self.db.library_eligible(video_id):
             raise ValueError("Automatic concert screening has not accepted this clip")
         return method(self, video_id, *args, **kwargs)
     return wrapped
@@ -344,7 +344,7 @@ class Workflow:
         for job in self.jobs():
             if len(results) >= limit or job['status'] != 'QUEUED':
                 continue
-            if not self.db.screening_accepted(job['video_id']):
+            if not self.db.library_eligible(job['video_id']):
                 self.set_job(job, 'BLOCKED', error_message='Automatic concert screening has not accepted this clip')
                 continue
             state = self.review(job['video_id'])
@@ -408,7 +408,7 @@ class Workflow:
 
     @atomic
     def claim(self, job):
-        if not self.db.screening_accepted(job['video_id']):
+        if not self.db.library_eligible(job['video_id']):
             return False
         state = self.review(job['video_id'])
         if not state['approved'] or state['revision'] != job['revision']:

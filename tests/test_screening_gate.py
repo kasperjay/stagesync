@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from stagesync.config import Settings
 from stagesync.database.connection import Database
-from stagesync.database.models import Video, VideoStatus, YouTubeUpload
+from stagesync.database.models import Video, VideoStatus, YouTubeUpload, Identification
 from stagesync.pipeline import PipelineCoordinator
 from stagesync.screening import Screening
 from stagesync.workflow import Workflow
@@ -27,6 +27,59 @@ class TestScreeningGate(unittest.TestCase):
         self.media = self.root/'clip.mp4'
         self.media.write_bytes(b'retained original')
         self.video = Video(source_photo_id='test', filename='clip.mp4', file_path=str(self.media))
+
+    def test_tagged_clips_bypass_screening_without_rewriting_history(self):
+        for decision in ('pending', 'review', 'reject'):
+            with self.subTest(decision=decision):
+                self.db.save_video(self.video)
+                self.db.save_identification(Identification(
+                    video_id=self.video.id, detected_song_title='Saved song',
+                    detected_artist='Saved artist', match_confidence=0.8,
+                    status='USER_ASSISTED_BAND'))
+                with self.db.transaction() as cur:
+                    cur.execute('UPDATE concert_screenings SET decision=? WHERE video_id=?',
+                                (decision, self.video.id))
+                saved = self.db.get_identification_by_video_id(self.video.id).model_dump()
+                with patch('stagesync.intelligence.concert_screen.screen_concert') as classifier:
+                    self.assertTrue(self.service.admit(self.video))
+                    self.assertEqual(list(self.service.audit(retry=True)), [])
+                    classifier.assert_not_called()
+                self.assertTrue(self.db.library_eligible(self.video.id))
+                self.assertEqual([v.id for v in self.db.list_videos()], [self.video.id])
+                self.assertEqual(self.db.library_status_counts(), {'DISCOVERED': 1})
+                self.assertEqual(self.service.list()[0]['decision'], decision)
+                self.assertTrue(self.service.list()[0]['exempt'])
+                self.assertEqual(self.db.get_identification_by_video_id(self.video.id).model_dump(), saved)
+        self.media.unlink()
+        self.assertTrue(self.db.library_eligible(self.video.id))
+        self.assertEqual(len(self.db.list_videos()), 1)
+
+    def test_background_processing_does_not_overwrite_saved_tags(self):
+        self.video.processing_status = VideoStatus.PENDING_REVIEW
+        self.db.save_video(self.video)
+        self.db.save_identification(Identification(
+            video_id=self.video.id, detected_song_title='Saved song',
+            detected_artist='Saved artist', match_confidence=0.8))
+        with patch.object(self.coord, 'process_video') as process:
+            self.assertEqual(self.coord.process_pending_videos(), [])
+            process.assert_not_called()
+
+    def test_monitor_skips_known_candidates_but_reaches_newer_pages(self):
+        self.coord.drive_client = MagicMock()
+        self.coord.metadata_parser = MagicMock()
+        self.coord.metadata_parser.probe_file.side_effect = RuntimeError('fixture')
+        item = {'id':'known', 'name':'clip.mp4', 'size':'5000000'}
+        self.video.source_photo_id = 'drive_known'
+        with patch('stagesync.intelligence.concert_screen.screen_concert', return_value={
+                'decision':'review', 'reason':'Provider error'}):
+            self.service.admit(self.video)
+        self.coord.drive_client.list_videos.side_effect = [([item], 'next'), ([dict(item,id='new')], None)]
+        self.coord.drive_client.download_video.return_value = (self.media, 'hash')
+        with patch('stagesync.intelligence.concert_screen.screen_concert', return_value=ACCEPT) as classifier:
+            result = self.coord.scan_google_drive(limit=0, only_new=True)
+        self.assertEqual([v.source_photo_id for v in result], ['drive_new'])
+        self.coord.drive_client.download_video.assert_called_once()
+        classifier.assert_called_once()
 
     def test_real_cli_parser_audits_lists_and_retries(self):
         import contextlib
@@ -246,6 +299,21 @@ class TestScreeningHTTP(AioHTTPTestCase):
     async def tearDownAsync(self):
         await super().tearDownAsync()
         self.fixture.doCleanups()
+
+    async def test_tagged_clip_is_visible_in_live_api_counts(self):
+        fixture = self.fixture
+        fixture.db.save_identification(Identification(
+            video_id=fixture.video.id, detected_song_title='Saved song',
+            detected_artist='Saved artist', match_confidence=0.9))
+        response = await self.client.get('/api/workflow/overview')
+        self.assertEqual(response.status, 200)
+        payload = await response.json()
+        self.assertEqual(payload['counts'], {'DISCOVERED': 1})
+        self.assertEqual(payload['unassigned'][0]['id'], fixture.video.id)
+        response = await self.client.get('/api/status')
+        self.assertEqual((await response.json())['total_videos'], 1)
+        response = await self.client.get('/api/screening')
+        self.assertTrue((await response.json())['items'][0]['exempt'])
 
     async def test_held_queue_retry_and_library_admission(self):
         response = await self.client.get('/api/screening')

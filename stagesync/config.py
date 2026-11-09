@@ -88,6 +88,9 @@ class Settings(BaseModel):
     )
 
     # Google Drive Integration
+    google_drive_watch_folder: Optional[str] = Field(
+        default_factory=lambda: os.getenv("STAGESYNC_DRIVE_WATCH_FOLDER") or None
+    )
     google_drive_client_id: Optional[str] = Field(
         default_factory=lambda: os.getenv(
             "GOOGLE_DRIVE_CLIENT_ID",

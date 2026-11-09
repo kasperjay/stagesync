@@ -435,6 +435,21 @@ class Database:
                 cur.execute("DELETE FROM videos WHERE id = :id", {"id": vid_id})
         return purged
 
+    _LIBRARY_FILTER = "(id IN (SELECT video_id FROM concert_screenings WHERE decision='accept') OR id IN (SELECT video_id FROM identifications))"
+
+    def has_saved_tags(self, video_id: str) -> bool:
+        return self._get_connection().execute(
+            "SELECT 1 FROM identifications WHERE video_id=? LIMIT 1", (video_id,)
+        ).fetchone() is not None
+
+    def library_eligible(self, video_id: str) -> bool:
+        return self.has_saved_tags(video_id) or self.screening_accepted(video_id)
+
+    def library_status_counts(self) -> dict:
+        return {row['processing_status']: row['count'] for row in self._get_connection().execute(
+            f"SELECT processing_status,COUNT(*) count FROM videos WHERE {self._LIBRARY_FILTER} GROUP BY processing_status"
+        )}
+
     def screening_accepted(self, video_id: str) -> bool:
         row = self._get_connection().execute(
             """SELECT s.decision,s.media_sha256,v.file_path FROM concert_screenings s
@@ -458,10 +473,10 @@ class Database:
         """List videos optionally filtered by processing status."""
         conn = self._get_connection()
         if status:
-            sql = "SELECT * FROM videos WHERE processing_status = :status AND id IN (SELECT video_id FROM concert_screenings WHERE decision='accept') ORDER BY created_at DESC LIMIT :limit"
+            sql = f"SELECT * FROM videos WHERE processing_status = :status AND {self._LIBRARY_FILTER} ORDER BY created_at DESC LIMIT :limit"
             rows = conn.execute(sql, {"status": status.value, "limit": limit}).fetchall()
         else:
-            sql = "SELECT * FROM videos WHERE id IN (SELECT video_id FROM concert_screenings WHERE decision='accept') ORDER BY created_at DESC LIMIT :limit"
+            sql = f"SELECT * FROM videos WHERE {self._LIBRARY_FILTER} ORDER BY created_at DESC LIMIT :limit"
             rows = conn.execute(sql, {"limit": limit}).fetchall()
         return [self._row_to_video(r) for r in rows]
 

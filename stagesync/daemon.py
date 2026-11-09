@@ -1,6 +1,6 @@
 """StageSync Background Watcher Daemon.
 
-Periodically queries Google Photos for new concert videos, executes the
+Periodically queries Google Drive for new concert videos, executes the
 intelligence pipeline, stages matches for review, and optionally auto-dispatches
 approved uploads within daily quota limits.
 """
@@ -30,8 +30,9 @@ class StageSyncDaemon:
         interval_minutes: int = 60,
         auto_process: bool = True,
         auto_upload: bool = False,
-        scan_limit: int = 50,
+        scan_limit: int = 0,
         process_limit: int = 25,
+        drive_folder: Optional[str] = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.db = db or get_db()
@@ -40,6 +41,7 @@ class StageSyncDaemon:
         self.auto_process = auto_process
         self.auto_upload = auto_upload
         self.scan_limit = scan_limit
+        self.drive_folder = drive_folder or self.settings.google_drive_watch_folder
         self.process_limit = process_limit
         self._running = False
 
@@ -61,14 +63,16 @@ class StageSyncDaemon:
 
         # 1. Ingest / Discovery
         try:
-            if self.coordinator.photos_client.is_authenticated():
-                discovered = self.coordinator.scan_google_photos(limit=self.scan_limit)
+            if self.coordinator.drive_client.is_authenticated():
+                discovered = self.coordinator.scan_google_drive(
+                    limit=self.scan_limit, folder_id=self.drive_folder, only_new=True
+                )
                 stats["scanned"] = len(discovered)
-                logger.info("Daemon scanned %d new video(s) from Google Photos.", len(discovered))
+                logger.info("Daemon scanned %d new video(s) from Google Drive.", len(discovered))
             else:
-                logger.warning("Google Photos is not authenticated. Skipping remote scan.")
+                logger.warning("Google Drive is not authenticated. Skipping remote scan.")
         except Exception as e:
-            logger.error("Error scanning Google Photos: %s", e)
+            logger.error("Error scanning Google Drive: %s", e)
             stats["errors"].append(f"Scan error: {e}")
 
         # 2. Intelligence Processing

@@ -1,8 +1,8 @@
 # StageSync (ConcertVault)
 
-> **Autonomous Live Concert Video Ingestion & YouTube Archival Pipeline**
+> **Drive-first Live Concert Video Ingestion & YouTube Archival Pipeline**
 
-StageSync connects your Google Photos cloud storage directly to YouTube, transforming disorganized phone concert clips (`file IMG_4821.MOV`, `file PXL_20240815.mp4`) into professionally tagged, setlist-verified live music video archives.
+StageSync connects your Google Drive video archive to YouTube, transforming disorganized phone concert clips (`file IMG_4821.MOV`, `file PXL_20240815.mp4`) into professionally tagged, setlist-verified live music video archives.
 
 ---
 
@@ -101,7 +101,7 @@ python3 -m stagesync.cli serve
 ### Background Watcher Daemon
 
 ```bash
-# Run continuous watcher polling Google Photos every 60 minutes
+# Run continuous watcher polling Google Drive every 60 minutes
 /home/workspace/stagesync/bin/stagesync daemon --interval 60
 
 # Single run-through cycle
@@ -191,8 +191,15 @@ show context clears setlist verification and requires publication review again.
 Active uploads retain the existing edit lock, so a conflicting update fails
 atomically rather than leaving the date partially synchronized.
 
-All import sources require automatic audiovisual concert screening. Only accepted
-clips appear in the library. Open `/screening` for held recordings, reasons and
-retry controls. Existing unscreened records are retained outside the library until
-`bin/stagesync screening --audit` accepts them; originals and publication history
-are preserved. See DOCUMENTATION.md for restartable audit and scan commands.
+New untagged imports require automatic audiovisual concert screening. Videos with
+saved identification records are exempt, including partial artist tags, and remain
+accessible without a successful screening result. Existing identity, review status
+and publication history are preserved. Open `/screening` for untagged held recordings.
+
+The daemon monitors Google Drive every 60 minutes by default and enumerates all
+candidate pages. Set `STAGESYNC_DRIVE_WATCH_FOLDER` or pass `daemon --drive-folder`
+to monitor one folder recursively; otherwise it searches accessible Drive videos.
+Previously cataloged or screened sources are skipped, including held/rejected
+candidates (retry those explicitly from Screening or a manual source rescan).
+Automatic processing does not overwrite saved identifications. Photos remains an
+optional manual import source. Uploads still require explicitly queued jobs.

@@ -12,6 +12,7 @@ Provides CLI commands for:
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -728,6 +729,8 @@ def cmd_daemon(args: argparse.Namespace) -> None:
     """Run continuous background watcher daemon."""
     from stagesync.daemon import StageSyncDaemon
 
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
     console.print(
         Panel(
             f"[bold cyan]StageSync Daemon[/bold cyan]\nInterval: {args.interval}m | Auto-Process: {not args.no_process} | Auto-Upload: {args.auto_upload}",
@@ -737,6 +740,7 @@ def cmd_daemon(args: argparse.Namespace) -> None:
     )
     daemon = StageSyncDaemon(
         interval_minutes=args.interval,
+        drive_folder=args.drive_folder,
         auto_process=not args.no_process,
         auto_upload=args.auto_upload,
     )
@@ -862,6 +866,7 @@ def main() -> None:
     p_daemon.add_argument("--no-process", action="store_true", help="Only scan without running AI intelligence")
     p_daemon.add_argument("--auto-upload", action="store_true", help="Automatically upload approved videos")
     p_daemon.add_argument("--run-once", action="store_true", help="Execute single cycle and exit")
+    p_daemon.add_argument("--drive-folder", default=None, help="Drive folder to monitor recursively; defaults to STAGESYNC_DRIVE_WATCH_FOLDER or all accessible Drive videos")
     p_daemon.set_defaults(func=cmd_daemon)
 
     # serve / ui / web
