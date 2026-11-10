@@ -174,5 +174,4 @@ def register(app, coordinator_key):
     app.router.add_post('/api/workflow/bulk', bulk)
     app.router.add_get('/api/workflow/{id}', state)
     app.router.add_post('/api/workflow/{id}/{action}', action)
-    app.router.add_get('/api/video/{id}/playback', media)
     app.router.add_get('/api/video/{id}/frame', frame)
