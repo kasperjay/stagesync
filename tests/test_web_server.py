@@ -31,6 +31,26 @@ class TestWebServer(AioHTTPTestCase):
             settings=self.mock_settings,
         )
 
+    async def test_playback_missing_file(self):
+        self.mock_db.get_video.return_value = None
+        response = await self.client.get('/api/video/missing/playback')
+        self.assertEqual(response.status, 404)
+
+    async def test_playback_cached_range(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'clip.mov'
+            source.write_bytes(b'original')
+            stat = source.stat()
+            cache = source.parent / 'playback'
+            cache.mkdir()
+            target = cache / f'{source.stem}-{stat.st_mtime_ns}-{stat.st_size}.mp4'
+            target.write_bytes(b'0123456789')
+            self.mock_db.get_video.return_value = MagicMock(id='clip', file_path=str(source))
+            response = await self.client.get('/api/video/clip/playback', headers={'Range': 'bytes=2-5'})
+            self.assertEqual(response.status, 206)
+            self.assertEqual(await response.read(), b'2345')
+            self.assertEqual(response.headers['Content-Type'], 'video/mp4')
+
     async def test_cinematic_home(self):
         response = await self.client.get("/")
         self.assertEqual(response.status, 200)
@@ -40,6 +60,19 @@ class TestWebServer(AioHTTPTestCase):
         self.assertNotIn('MOCK_SHOWS', html)
         self.assertNotIn('Riverside Live', html)
         self.assertNotIn('vs. last 7 days', html)
+
+    async def test_dashboard_redirects(self):
+        """Verify legacy /dashboard.html and /dashboard redirect to root /."""
+        for path in ("/dashboard.html", "/dashboard"):
+            resp = await self.client.get(path, allow_redirects=False)
+            self.assertEqual(resp.status, 301)
+            self.assertEqual(resp.headers.get("Location"), "/")
+
+            # Follow redirect to verify 200 OK
+            resp_followed = await self.client.get(path, allow_redirects=True)
+            self.assertEqual(resp_followed.status, 200)
+            text = await resp_followed.text()
+            self.assertIn("StageSync", text)
 
     async def test_get_index(self):
         """Verify dashboard HTML is served at root."""

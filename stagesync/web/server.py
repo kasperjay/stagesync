@@ -190,6 +190,8 @@ def create_app(
     # Register Routes
     app.router.add_get("/", handle_index)
     app.router.add_get("/workspace", handle_workspace)
+    app.router.add_get("/dashboard.html", handle_dashboard_redirect)
+    app.router.add_get("/dashboard", handle_dashboard_redirect)
     app.router.add_get("/api/status", handle_get_status)
     app.router.add_get("/api/scan/{scan_id}", handle_get_scan)
     app.router.add_post("/api/scan/{scan_id}/cancel", handle_cancel_scan)
@@ -197,6 +199,7 @@ def create_app(
     app.router.add_get("/api/video/{id}", handle_get_video)
     app.router.add_get("/api/video/{id}/thumbnail", handle_video_thumbnail)
     app.router.add_get("/api/video/{id}/audio", handle_video_audio)
+    app.router.add_get("/api/video/{id}/playback", handle_video_playback)
     app.router.add_get("/api/video/{id}/song-options", handle_song_options)
     app.router.add_get("/api/venues/search", handle_venue_search)
     app.router.add_post("/api/video/{id}/setlist-search", handle_setlist_search)
@@ -239,6 +242,11 @@ async def handle_workspace(request: web.Request) -> web.Response:
         content_type="text/html",
         headers={"Cache-Control": "no-store"},
     )
+
+
+async def handle_dashboard_redirect(request: web.Request) -> web.Response:
+    """Redirect legacy dashboard requests to the primary index SPA."""
+    raise web.HTTPMovedPermanently(location="/")
 
 
 async def handle_get_status(request: web.Request) -> web.Response:
@@ -612,6 +620,43 @@ def _get_audio_extract_lock(video_id: str) -> asyncio.Lock:
     return lock
 
 
+async def handle_video_playback(request: web.Request) -> web.Response:
+    video = request.app[DB_KEY].get_video(request.match_info["id"])
+    if not video or not video.file_path or not Path(video.file_path).is_file():
+        return web.json_response({"error": "Video file not available"}, status=404)
+    source = Path(video.file_path)
+    stat = source.stat()
+    cache = source.parent / "playback"
+    cache.mkdir(exist_ok=True)
+    target = cache / f"{source.stem}-{stat.st_mtime_ns}-{stat.st_size}.mp4"
+    async with _get_audio_extract_lock("playback:" + video.id):
+        if not target.exists():
+            temporary = target.with_suffix(".tmp.mp4")
+            process = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(source),
+                "-map", "0:v:0", "-map", "0:a:0?", "-vf",
+                "scale=720:720:force_original_aspect_ratio=decrease:force_divisible_by=2",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+                "-pix_fmt", "yuv420p", "-threads", "2", "-c:a", "aac",
+                "-b:a", "128k", "-movflags", "+faststart", str(temporary),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            try:
+                await asyncio.wait_for(process.wait(), timeout=600)
+                if process.returncode != 0:
+                    return web.json_response({"error": "Video preview conversion failed"}, status=502)
+                temporary.replace(target)
+            finally:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+                temporary.unlink(missing_ok=True)
+    return web.FileResponse(target, headers={
+        "Content-Type": "video/mp4", "Content-Disposition": "inline",
+        "Cache-Control": "private, max-age=86400",
+    })
+
+
 async def handle_video_audio(request: web.Request) -> web.Response:
     """Serve a compact cached full-length audio track (faststart M4A) for instant web playback."""
     db: Database = request.app[DB_KEY]
@@ -763,8 +808,8 @@ async def handle_set_video_venue(request: web.Request) -> web.Response:
     country_code = body.get("country_code") or body.get("country") or "US"
     lat_raw = body.get("latitude")
     lon_raw = body.get("longitude")
-    latitude = float(lat_raw) if lat_raw is not None else None
-    longitude = float(lon_raw) if lon_raw is not None else None
+    latitude = float(lat_raw) if lat_raw is not None else 0.0
+    longitude = float(lon_raw) if lon_raw is not None else 0.0
     setlist_fm_venue_id = body.get("setlist_fm_venue_id")
     osm_id = body.get("osm_id")
     formatted_address = body.get("formatted_address")
@@ -814,8 +859,8 @@ async def handle_apply_venue_to_date(request: web.Request) -> web.Response:
             city=body.get("city"),
             state_province=body.get("state_province") or body.get("state"),
             country_code=body.get("country_code") or body.get("country") or "US",
-            latitude=float(body["latitude"]) if body.get("latitude") is not None else None,
-            longitude=float(body["longitude"]) if body.get("longitude") is not None else None,
+            latitude=float(body["latitude"]) if body.get("latitude") is not None else 0.0,
+            longitude=float(body["longitude"]) if body.get("longitude") is not None else 0.0,
             setlist_fm_venue_id=body.get("setlist_fm_venue_id"),
             osm_id=body.get("osm_id"),
             formatted_address=body.get("formatted_address"),
