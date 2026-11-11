@@ -2200,7 +2200,7 @@ var Controllers = {
           '<td class="font-mono">' + s.idx + '</td>' +
           '<td><button class="icon-btn btn-audio-preview" data-id="' + escapeHtml(v.id) + '" onclick="toggleSongAudio(this, \'' + escapeHtml(v.id) + '\')">▶</button></td>' +
           '<td><strong style="color:#FFF;">' + escapeHtml(s.title) + '</strong></td>' +
-          '<td><span class="font-mono" style="color:var(--green-emerald);font-weight:700;">' + s.conf + '%</span></td>' +
+          '<td><span class="font-mono" style="color:var(--green-emerald);font-weight:700;">' + (s.conf === null ? 'Not scored' : s.conf + '%') + '</span></td>' +
           '<td><span class="tag-chip" style="font-size:11px;">' + escapeHtml(s.source) + '</span></td>' +
         '</tr>';
       }).join('');
