@@ -1821,6 +1821,26 @@ var Store = {
 };
 
 /* ── Video Model Normalizer ── */
+function compareDateTaken(a, b) {
+  function captureTime(video) {
+    var raw = video.raw || video;
+    var utc = raw.recorded_at_utc;
+    var local = raw.recorded_at_local;
+    for (var value of [utc, local]) {
+      if (!value) continue;
+      var timestamp = String(value).trim().replace(' ', 'T');
+      if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(timestamp)) timestamp += 'Z';
+      var time = Date.parse(timestamp);
+      if (Number.isFinite(time)) return time;
+    }
+    return Infinity;
+  }
+  var aTime = captureTime(a);
+  var bTime = captureTime(b);
+  if (aTime !== bTime) return aTime < bTime ? -1 : 1;
+  return String(a.id).localeCompare(String(b.id));
+}
+
 function normalizeVideo(raw) {
   if (!raw) return null;
   var ident = raw.identification || {};
@@ -3246,7 +3266,7 @@ async function refreshDashboard() {
         (document.activeElement && ['edit-artist', 'edit-song'].includes(document.activeElement.id))) return;
 
     if (Array.isArray(rawVideos)) {
-      Store.state.videos = rawVideos.map(normalizeVideo);
+      Store.state.videos = rawVideos.map(normalizeVideo).sort(compareDateTaken);
       if (Store.state.videos.length > 0) {
         if (!Store.state.videos.some(function(v) { return v.id === Store.state.currentVideoId; })) {
           Store.state.currentVideoId = Store.state.videos[0].id;
