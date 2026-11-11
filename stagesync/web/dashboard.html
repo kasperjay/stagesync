@@ -2390,6 +2390,11 @@
 
         statusData = resStatus;
         videosData = resVideos.videos || [];
+        const searchShowId = new URLSearchParams(location.search).get('search_show');
+        if (searchShowId && videosData.some(video => video.id === searchShowId)) {
+          openSetlistAssistModal(searchShowId);
+          history.replaceState(null, '', location.pathname);
+        }
 
         // Update Statistics
         const total = statusData.total_videos || 0;

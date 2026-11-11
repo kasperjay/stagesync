@@ -1334,7 +1334,8 @@ html, body {
           <div class="show-card-left">
             <img class="show-poster-thumb" src="/static/images/thumb_guitarist.png" alt="Opeth Live" onerror="this.src='/static/images/header_lighting_rig.png'"/>
             <div>
-              <span class="badge-likely-match">✓ Likely Match</span>
+              <span class="badge-likely-match" id="identify-show-status">No show selected</span>
+              <a class="btn-primary-cyan" id="identify-search-show" href="/workspace">Search / change show</a>
               <h2 class="show-band-heading" id="likely-show-band">Opeth</h2>
               <div class="show-meta-line">
                 <span id="likely-show-date">📅 Aug 17, 2024</span>
@@ -2146,8 +2147,12 @@ var Controllers = {
       if (dateEl) dateEl.textContent = '📅 ' + (v.date || 'Concert Date');
       if (venEl) venEl.textContent = '📍 ' + (v.venue || 'Concert Venue');
 
-      var conf = (v.conf !== undefined && v.conf !== null) ? v.conf : 93;
-      if (valEl) valEl.textContent = conf + '%';
+      var concert = (v.raw || {}).concert;
+      var hasShow = !!(concert && concert.id);
+      document.getElementById('identify-show-status').textContent = hasShow ? 'Show selected' : 'No show selected';
+      document.getElementById('identify-search-show').href = '/workspace?search_show=' + encodeURIComponent(v.id);
+      var conf = 0;
+      if (valEl) valEl.textContent = hasShow ? 'Selected' : '0%';
       if (ringEl) {
         var offset = 238.7 * (1 - (conf / 100));
         ringEl.setAttribute('stroke-dashoffset', offset.toFixed(1));
@@ -2164,7 +2169,7 @@ var Controllers = {
             return {
               idx: idx + 1,
               title: s.title || s.name || 'Unknown Track',
-              conf: s.conf || (data.source === 'setlist' ? Math.max(88, 98 - idx) : 85),
+              conf: null,
               source: s.source === 'setlist' ? 'Setlist.fm' : (data.source || 'MusicBrainz')
             };
           });
@@ -2172,9 +2177,11 @@ var Controllers = {
       } catch(e) {}
 
       // Fallback: If no candidate list returned from setlist/discography search, show recognized fingerprint
-      if (candidateList.length === 0 && v.title) {
+      var songTitle = ((v.raw || {}).identification || {}).detected_song_title;
+      var placeholder = /^(live performance|unknown(?: song)?|unidentified(?: song| clip)?|unidentifiable|none|null|n\/a|instrumental|clip)$/i;
+      if (candidateList.length === 0 && songTitle && !placeholder.test(songTitle.trim())) {
         candidateList = [
-          { idx: 1, title: v.title, conf: v.conf || 94, source: v.source || 'ACRCloud' }
+          { idx: 1, title: songTitle, conf: v.conf, source: v.source || 'Unknown' }
         ];
       }
 
