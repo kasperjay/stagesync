@@ -20,6 +20,21 @@ const Api = {getSongOptions:(...args)=>{lastArgs=args;return new Promise((resolv
 const escapeHtml = s=>s;
 const controller = eval('({' + source.slice(start,end) + '})');
 (async()=>{
+ assert.doesNotMatch(source,/id="approve-song-search"/);
+ assert.match(source,/oninput="handleSongChange\(\); Controllers.approve.searchSongs\(this.value\)"/);
+ const searchStart = source.indexOf('    searchSongs(value) {');
+ const searchController = eval('({' + source.slice(searchStart,start).replace(/,\s*$/, '') + '})');
+ const calls = [];
+ searchController.renderSuggestedMatches = q => calls.push(q);
+ searchController.searchSongs('Gh');
+ searchController.searchSongs('Ghost');
+ await new Promise(r=>setTimeout(r,400));
+ assert.deepEqual(calls,['Ghost']);
+ searchController.searchSongs('Other');
+ Store.state.currentVideoId='elsewhere';
+ await new Promise(r=>setTimeout(r,400));
+ assert.deepEqual(calls,['Ghost']);
+ Store.state.currentVideoId='first';
  const first=controller.renderSuggestedMatches();
  Store.state.currentVideoId='second';
  const second=controller.renderSuggestedMatches();

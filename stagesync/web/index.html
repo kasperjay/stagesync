@@ -1433,7 +1433,7 @@ html, body {
                   <label class="form-label" for="edit-song">Song *</label>
                   <span class="font-mono" style="color:var(--amber-vibrant);font-size:11px;font-weight:700;" id="edit-song-conf-badge">⚠ 84% Match</span>
                 </div>
-                <input class="form-input" id="edit-song" value="The Drapery Falls" oninput="handleSongChange()" onchange="handleSongChange()" onblur="handleSongChange()"/>
+                <input class="form-input" id="edit-song" value="The Drapery Falls" oninput="handleSongChange(); Controllers.approve.searchSongs(this.value)" onchange="handleSongChange()" onblur="handleSongChange()"/>
               </div>
             </div>
 
@@ -1442,11 +1442,6 @@ html, body {
             <!-- Suggested Acoustic Matches Selector -->
             <div class="suggested-matches-box">
               <div class="form-label" style="margin-bottom:8px;">Suggested Acoustic Matches</div>
-              <form onsubmit="event.preventDefault(); Controllers.approve.renderSuggestedMatches(document.getElementById('approve-song-search').value.trim());" style="display:flex;gap:8px;margin-bottom:12px;">
-                <input id="approve-song-search" type="search" minlength="2" required aria-label="Search artist discography" placeholder="Song title (at least 2 characters)" style="flex:1;min-width:0;" />
-                <button type="submit" class="btn btn-secondary">Search discography</button>
-                <button type="button" class="btn btn-secondary" onclick="Controllers.approve.renderSuggestedMatches()">Setlist</button>
-              </form>
               <div id="suggested-matches-container" aria-live="polite">
                 <!-- Radio options -->
               </div>
@@ -2275,7 +2270,20 @@ var Controllers = {
         '</div>';
       }).join('');
     },
+    searchSongs(value) {
+      clearTimeout(this.songSearchTimer);
+      this.songOptionsRequest = (this.songOptionsRequest || 0) + 1;
+      var clipId = Store.state.currentVideoId;
+      var query = value.trim();
+      var container = document.getElementById('suggested-matches-container');
+      if (container) container.textContent = query.length >= 2 ? 'Searching songs…' : 'Loading song options…';
+      this.songSearchTimer = setTimeout(() => {
+        if (clipId !== Store.state.currentVideoId) return;
+        this.renderSuggestedMatches(query.length >= 2 ? query : undefined);
+      }, 350);
+    },
     async renderSuggestedMatches(query) {
+      clearTimeout(this.songSearchTimer);
       var container = document.getElementById('suggested-matches-container');
       if (!container) return;
       var curId = Store.state.currentVideoId;
@@ -2289,7 +2297,7 @@ var Controllers = {
         var cands = Array.isArray(data.songs) ? data.songs : [];
         if (!cands.length) {
           container.textContent = data.requires_query
-            ? 'No setlist available for this artist. Search the discography above or enter a song title manually.'
+            ? 'No setlist available for this artist. Type at least two characters in the Song field to search the discography.'
             : (data.message || (query ? 'No discography results found. Try another song title.' : 'No song options available for this clip.'));
           return;
         }
@@ -2304,7 +2312,7 @@ var Controllers = {
         }).join('');
       } catch (e) {
         if (requestId !== this.songOptionsRequest || curId !== Store.state.currentVideoId) return;
-        container.textContent = 'Could not load song options. Select the clip again to retry.';
+        container.textContent = 'Could not load song options. Edit the Song field to retry.';
       }
     }
   },
