@@ -1414,7 +1414,7 @@ html, body {
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
               <div>
                 <label class="form-label" for="edit-artist">Artist *</label>
-                <input class="form-input" id="edit-artist" value="Opeth" onchange="handleArtistChange()" onblur="handleArtistChange()"/>
+                <input class="form-input" id="edit-artist" value="Opeth" oninput="handleArtistChange()" onchange="handleArtistChange()" onblur="handleArtistChange()"/>
               </div>
               <div>
                 <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -1433,7 +1433,7 @@ html, body {
                   <label class="form-label" for="edit-song">Song *</label>
                   <span class="font-mono" style="color:var(--amber-vibrant);font-size:11px;font-weight:700;" id="edit-song-conf-badge">⚠ 84% Match</span>
                 </div>
-                <input class="form-input" id="edit-song" value="The Drapery Falls" onchange="handleSongChange()" onblur="handleSongChange()"/>
+                <input class="form-input" id="edit-song" value="The Drapery Falls" oninput="handleSongChange()" onchange="handleSongChange()" onblur="handleSongChange()"/>
               </div>
             </div>
 
@@ -2569,66 +2569,58 @@ function selectAcousticCandidate(title, conf) {
   handleSongChange();
 }
 
-async function handleArtistChange() {
+var approvalSaveQueue = Promise.resolve();
+var approvalSaveErrors = new Map();
+
+function saveApprovalIdentity() {
   var id = Store.state.currentVideoId;
-  var el = document.getElementById('edit-artist');
-  if (!id || !el) return;
-  var artistName = el.value.trim();
-  if (!artistName) return;
-
-  var currentClip = Store.state.videos.find(function(v) { return v.id === id; });
-  if (currentClip && currentClip.artist === artistName && currentClip._persistedArtist === artistName) {
-    return;
+  var artist = document.getElementById('edit-artist').value.trim();
+  var song = document.getElementById('edit-song').value.trim();
+  if (!id || !artist || !song) return approvalSaveQueue;
+  var clip = Store.state.videos.find(function(v) { return v.id === id; });
+  if (clip) {
+    if (clip._persistedArtist === undefined) clip._persistedArtist = clip.artist;
+    if (clip._persistedSong === undefined) clip._persistedSong = clip.title;
+    clip.artist = artist;
+    clip.title = song;
   }
-
-  try {
-    var res = await Api.setBand(id, { artist_name: artistName });
-    if (res && res.success !== false) {
-      if (currentClip) {
-        currentClip.artist = artistName;
-        currentClip._persistedArtist = artistName;
+  approvalSaveQueue = approvalSaveQueue.then(async function() {
+    if (clip && clip._persistedArtist === artist && clip._persistedSong === song) return;
+    try {
+      var res = await Api.setSong(id, { artist_name: artist, song_title: song });
+      if (!res || res.success === false) throw new Error((res && res.error) || 'Save failed');
+      if (clip) {
+        clip._persistedArtist = artist;
+        clip._persistedSong = song;
       }
-      Controllers.approve.renderSuggestedMatches();
-      showToast('Saved artist: ' + artistName, 'success');
+      approvalSaveErrors.delete(id);
       Controllers.approve.renderClips();
-    } else {
-      showToast((res && res.error) || 'Failed to save artist', 'error');
+    } catch (e) {
+      approvalSaveErrors.set(id, e);
+      showToast('Corrections not saved: ' + e.message + '. Edit the field again to retry.', 'error');
     }
-  } catch(e) {
-    showToast('Failed to save artist: ' + (e.message || 'Server error'), 'error');
-  }
+  });
+  return approvalSaveQueue;
 }
 
-async function handleSongChange() {
-  var id = Store.state.currentVideoId;
-  var sngEl = document.getElementById('edit-song');
-  var artEl = document.getElementById('edit-artist');
-  if (!id || !sngEl) return;
-  var songTitle = sngEl.value.trim();
-  var artistName = artEl ? artEl.value.trim() : '';
-  if (!songTitle) return;
-
-  var currentClip = Store.state.videos.find(function(v) { return v.id === id; });
-  if (currentClip && currentClip.title === songTitle && currentClip._persistedSong === songTitle) {
-    return;
-  }
-
-  try {
-    var res = await Api.setSong(id, { song_title: songTitle, artist_name: artistName });
-    if (res && res.success !== false) {
-      if (currentClip) {
-        currentClip.title = songTitle;
-        currentClip._persistedSong = songTitle;
-      }
-      showToast('Saved song: ' + songTitle, 'success');
-      Controllers.approve.renderClips();
-    } else {
-      showToast((res && res.error) || 'Failed to save song', 'error');
-    }
-  } catch(e) {
-    showToast('Failed to save song: ' + (e.message || 'Server error'), 'error');
-  }
+function handleArtistChange() {
+  return saveApprovalIdentity();
 }
+
+function handleSongChange() {
+  return saveApprovalIdentity();
+}
+
+if (typeof window !== 'undefined') window.addEventListener('beforeunload', function(event) {
+  var unsaved = Store.state.videos.some(function(clip) {
+    return (clip._persistedArtist !== undefined || clip._persistedSong !== undefined) &&
+      (clip.artist !== clip._persistedArtist || clip.title !== clip._persistedSong);
+  });
+  if (unsaved || approvalSaveErrors.size) {
+    event.preventDefault();
+    event.returnValue = '';
+  }
+});
 
 async function confirmApprovalAndNext() {
   if (confirmApprovalAndNext._inFlight) return;
@@ -2653,6 +2645,9 @@ async function confirmApprovalAndNext() {
     var songTitle = (sngInput ? sngInput.value : '').trim() || currentClip.title || '';
     var venueName = (venInput ? venInput.value : '').trim() || currentClip.venue || '';
     var showDate = (datInput ? datInput.value : '').trim() || currentClip.date || '';
+
+    await saveApprovalIdentity();
+    if (approvalSaveErrors.has(id)) return;
 
     // 1. Fetch current workflow state for sequential identity check
     var wfState = null;
