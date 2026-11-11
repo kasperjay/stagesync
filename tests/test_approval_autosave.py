@@ -24,11 +24,20 @@ const context = {
 vm.createContext(context);
 vm.runInContext(html.slice(html.indexOf('var approvalSaveQueue'), html.indexOf('async function confirmApprovalAndNext')), context);
 (async()=>{
+ vm.runInContext(html.slice(html.indexOf('async function refreshDashboard()'), html.indexOf('/* ── Browser Bootstrap Guard')), context);
+ context.Api.getStatus=async()=>({});
+ context.Api.getOverview=async()=>({});
+ context.Api.getVideos=async()=>[{id:'one',artist:'Stale artist',title:'Stale song'}];
+ context.normalizeVideo=v=>v;
+ const refresh = context.refreshDashboard();
  const first = context.handleArtistChange();
  fields['edit-song'].value='Final song';
  const second = context.handleSongChange();
  context.Store.state.currentVideoId='two';
  await second;
+ await refresh;
+ assert.equal(context.Store.state.videos[0].title,'Final song');
+ assert.equal(context.approvalPendingSaves,0);
  assert.equal(calls.length,2);
  assert.equal(calls[0][0],'one');
  assert.equal(calls[1][0],'one');

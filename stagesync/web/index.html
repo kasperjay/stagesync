@@ -1437,6 +1437,8 @@ html, body {
               </div>
             </div>
 
+            <div id="approval-save-status" role="status" aria-live="polite" class="section-subtext"></div>
+
             <!-- Suggested Acoustic Matches Selector -->
             <div class="suggested-matches-box">
               <div class="form-label" style="margin-bottom:8px;">Suggested Acoustic Matches</div>
@@ -2571,12 +2573,25 @@ function selectAcousticCandidate(title, conf) {
 
 var approvalSaveQueue = Promise.resolve();
 var approvalSaveErrors = new Map();
+var approvalPendingSaves = 0;
+var approvalEditRevision = 0;
+
+function approvalSaveStatus(message) {
+  var node = document.getElementById('approval-save-status');
+  if (node) node.textContent = message;
+}
 
 function saveApprovalIdentity() {
   var id = Store.state.currentVideoId;
   var artist = document.getElementById('edit-artist').value.trim();
   var song = document.getElementById('edit-song').value.trim();
-  if (!id || !artist || !song) return approvalSaveQueue;
+  if (!id || !artist || !song) {
+    approvalSaveStatus('Enter both artist and song to save corrections.');
+    return approvalSaveQueue;
+  }
+  approvalEditRevision++;
+  approvalPendingSaves++;
+  approvalSaveStatus('Saving corrections…');
   var clip = Store.state.videos.find(function(v) { return v.id === id; });
   if (clip) {
     if (clip._persistedArtist === undefined) clip._persistedArtist = clip.artist;
@@ -2585,8 +2600,8 @@ function saveApprovalIdentity() {
     clip.title = song;
   }
   approvalSaveQueue = approvalSaveQueue.then(async function() {
-    if (clip && clip._persistedArtist === artist && clip._persistedSong === song) return;
     try {
+      if (clip && clip._persistedArtist === artist && clip._persistedSong === song) return;
       var res = await Api.setSong(id, { artist_name: artist, song_title: song });
       if (!res || res.success === false) throw new Error((res && res.error) || 'Save failed');
       if (clip) {
@@ -2598,6 +2613,10 @@ function saveApprovalIdentity() {
     } catch (e) {
       approvalSaveErrors.set(id, e);
       showToast('Corrections not saved: ' + e.message + '. Edit the field again to retry.', 'error');
+    } finally {
+      approvalPendingSaves--;
+      approvalSaveStatus(approvalSaveErrors.size ? 'Corrections not saved. Edit again to retry.' :
+        approvalPendingSaves ? 'Saving corrections…' : 'Corrections saved.');
     }
   });
   return approvalSaveQueue;
@@ -2616,7 +2635,7 @@ if (typeof window !== 'undefined') window.addEventListener('beforeunload', funct
     return (clip._persistedArtist !== undefined || clip._persistedSong !== undefined) &&
       (clip.artist !== clip._persistedArtist || clip.title !== clip._persistedSong);
   });
-  if (unsaved || approvalSaveErrors.size) {
+  if (unsaved || approvalPendingSaves || approvalSaveErrors.size) {
     event.preventDefault();
     event.returnValue = '';
   }
@@ -3207,6 +3226,7 @@ function escapeHtml(str) {
 
 /* ── Dashboard Polling & Live Data Refresh ── */
 async function refreshDashboard() {
+  var editRevision = approvalEditRevision;
   try {
     var status = await Api.getStatus();
     var overview = await Api.getOverview();
@@ -3215,6 +3235,9 @@ async function refreshDashboard() {
     if (overview) {
       Store.state.overviewData = overview;
     }
+
+    if (approvalPendingSaves || approvalSaveErrors.size || editRevision !== approvalEditRevision ||
+        (document.activeElement && ['edit-artist', 'edit-song'].includes(document.activeElement.id))) return;
 
     if (Array.isArray(rawVideos)) {
       Store.state.videos = rawVideos.map(normalizeVideo);
