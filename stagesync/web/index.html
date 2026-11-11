@@ -1442,7 +1442,12 @@ html, body {
             <!-- Suggested Acoustic Matches Selector -->
             <div class="suggested-matches-box">
               <div class="form-label" style="margin-bottom:8px;">Suggested Acoustic Matches</div>
-              <div id="suggested-matches-container">
+              <form onsubmit="event.preventDefault(); Controllers.approve.renderSuggestedMatches(document.getElementById('approve-song-search').value.trim());" style="display:flex;gap:8px;margin-bottom:12px;">
+                <input id="approve-song-search" type="search" minlength="2" required aria-label="Search artist discography" placeholder="Song title (at least 2 characters)" style="flex:1;min-width:0;" />
+                <button type="submit" class="btn btn-secondary">Search discography</button>
+                <button type="button" class="btn btn-secondary" onclick="Controllers.approve.renderSuggestedMatches()">Setlist</button>
+              </form>
+              <div id="suggested-matches-container" aria-live="polite">
                 <!-- Radio options -->
               </div>
             </div>
@@ -1923,8 +1928,9 @@ var Api = {
   async getVideo(id) {
     return await this.fetchJson('/api/video/' + encodeURIComponent(id));
   },
-  async getSongOptions(videoId, query) {
+  async getSongOptions(videoId, query, discography) {
     var url = '/api/video/' + encodeURIComponent(videoId) + '/song-options' + (query ? '?q=' + encodeURIComponent(query) : '');
+    if (discography) url += (query ? '&' : '?') + 'source=discography';
     return await this.fetchJson(url);
   },
   async searchVenues(query) {
@@ -2249,7 +2255,7 @@ var Controllers = {
         '</div>';
       }).join('');
     },
-    async renderSuggestedMatches() {
+    async renderSuggestedMatches(query) {
       var container = document.getElementById('suggested-matches-container');
       if (!container) return;
       var curId = Store.state.currentVideoId;
@@ -2257,14 +2263,14 @@ var Controllers = {
       container.textContent = curId ? 'Loading song options…' : 'Select a clip to see song options.';
       if (!curId) return;
       try {
-        var data = await Api.getSongOptions(curId);
+        var data = await Api.getSongOptions(curId, query, !!query);
         if (requestId !== this.songOptionsRequest || curId !== Store.state.currentVideoId) return;
         if (data.error) throw new Error(data.error);
         var cands = Array.isArray(data.songs) ? data.songs : [];
         if (!cands.length) {
           container.textContent = data.requires_query
-            ? 'No setlist available for this artist. Enter a song title manually or use song search in the workspace.'
-            : (data.message || 'No song options available for this clip.');
+            ? 'No setlist available for this artist. Search the discography above or enter a song title manually.'
+            : (data.message || (query ? 'No discography results found. Try another song title.' : 'No song options available for this clip.'));
           return;
         }
         container.innerHTML = cands.map(function(cand) {
@@ -2273,7 +2279,7 @@ var Controllers = {
               '<input type="radio" name="match_candidate" value="' + escapeHtml(cand.title) + '" onchange="selectAcousticCandidate(this.value, null)"/>' +
               '<strong style="color:#FFF;">' + escapeHtml(cand.title) + '</strong>' +
             '</label>' +
-            '<span class="font-mono">' + escapeHtml(cand.source === 'setlist' ? 'Setlist.fm' : 'Song option') + '</span>' +
+            '<span class="font-mono">' + escapeHtml(cand.source === 'setlist' ? 'Setlist.fm' : 'MusicBrainz') + '</span>' +
           '</div>';
         }).join('');
       } catch (e) {
