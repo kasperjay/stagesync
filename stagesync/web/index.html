@@ -1781,11 +1781,6 @@ var FALLBACK_DATA = {
     { id: 'v3', filename: 'P1011725.mp4', size: '9.7 GB', duration: '7:42', title: 'The Drapery Falls', artist: 'Opeth', venue: 'The Fillmore', date: '2024-08-17', conf: 84, source: 'ACRCloud', status: 'review' },
     { id: 'v4', filename: 'P1011726.mp4', size: '5.2 GB', duration: '5:46', title: 'In My Time of Need', artist: 'Opeth', venue: 'The Fillmore', date: '2024-08-17', conf: 95, source: 'Setlist.fm', status: 'confirmed' }
   ],
-  songCandidates: [
-    { title: 'The Drapery Falls', conf: 84 },
-    { title: 'Harvest', conf: 11 },
-    { title: 'Dirge for November', conf: 3 }
-  ],
   tags: ['Opeth', 'Demon of the Fall', 'Live', 'The Fillmore']
 };
 
@@ -2241,31 +2236,37 @@ var Controllers = {
         '</div>';
       }).join('');
     },
-    renderSuggestedMatches() {
+    async renderSuggestedMatches() {
       var container = document.getElementById('suggested-matches-container');
       if (!container) return;
       var curId = Store.state.currentVideoId;
-      var curClip = Store.state.videos.find(function(v) { return v.id === curId; });
-      var cands = FALLBACK_DATA.songCandidates;
-      if (curClip && curClip.title && curClip.title !== 'Untitled Recording') {
-        cands = [
-          { title: curClip.title, conf: curClip.conf || 94 }
-        ];
-        if (FALLBACK_DATA.songCandidates) {
-          FALLBACK_DATA.songCandidates.forEach(function(sc) {
-            if (sc.title !== curClip.title) cands.push(sc);
-          });
+      var requestId = this.songOptionsRequest = (this.songOptionsRequest || 0) + 1;
+      container.textContent = curId ? 'Loading song options…' : 'Select a clip to see song options.';
+      if (!curId) return;
+      try {
+        var data = await Api.getSongOptions(curId);
+        if (requestId !== this.songOptionsRequest || curId !== Store.state.currentVideoId) return;
+        if (data.error) throw new Error(data.error);
+        var cands = Array.isArray(data.songs) ? data.songs : [];
+        if (!cands.length) {
+          container.textContent = data.requires_query
+            ? 'No setlist available for this artist. Enter a song title manually or use song search in the workspace.'
+            : (data.message || 'No song options available for this clip.');
+          return;
         }
+        container.innerHTML = cands.map(function(cand) {
+          return '<div class="match-radio-row">' +
+            '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;flex:1;">' +
+              '<input type="radio" name="match_candidate" value="' + escapeHtml(cand.title) + '" onchange="selectAcousticCandidate(this.value, null)"/>' +
+              '<strong style="color:#FFF;">' + escapeHtml(cand.title) + '</strong>' +
+            '</label>' +
+            '<span class="font-mono">' + escapeHtml(cand.source === 'setlist' ? 'Setlist.fm' : 'Song option') + '</span>' +
+          '</div>';
+        }).join('');
+      } catch (e) {
+        if (requestId !== this.songOptionsRequest || curId !== Store.state.currentVideoId) return;
+        container.textContent = 'Could not load song options. Select the clip again to retry.';
       }
-      container.innerHTML = cands.map(function(cand, idx) {
-        return '<div class="match-radio-row ' + (idx === 0 ? 'selected' : '') + '">' +
-          '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;flex:1;">' +
-            '<input type="radio" name="match_candidate" value="' + escapeHtml(cand.title) + '" data-cand-conf="' + cand.conf + '" ' + (idx === 0 ? 'checked' : '') + ' onchange="selectAcousticCandidate(this.value, Number(this.dataset.candConf))"/>' +
-            '<strong style="color:#FFF;">' + escapeHtml(cand.title) + '</strong>' +
-          '</label>' +
-          '<span class="font-mono" style="color:' + (cand.conf >= 80 ? 'var(--amber-vibrant)' : 'var(--text-dim)') + ';font-weight:700;">' + cand.conf + '%</span>' +
-        '</div>';
-      }).join('');
     }
   },
 
@@ -2551,7 +2552,7 @@ function selectAcousticCandidate(title, conf) {
   var confBd = document.getElementById('edit-song-conf-badge');
   if (sngIn) sngIn.value = title;
   if (confBd) {
-    confBd.textContent = (conf < 90 ? '⚠ ' : '✔ ') + conf + '% Match';
+    confBd.textContent = conf == null ? 'Manual selection' : (conf < 90 ? '⚠ ' : '✔ ') + conf + '% Match';
     confBd.style.color = conf < 90 ? 'var(--amber-vibrant)' : 'var(--green-emerald)';
   }
   handleSongChange();
@@ -2576,6 +2577,7 @@ async function handleArtistChange() {
         currentClip.artist = artistName;
         currentClip._persistedArtist = artistName;
       }
+      Controllers.approve.renderSuggestedMatches();
       showToast('Saved artist: ' + artistName, 'success');
       Controllers.approve.renderClips();
     } else {
