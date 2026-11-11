@@ -2236,7 +2236,7 @@ var Controllers = {
         var isSel = c.id === Store.state.currentVideoId;
         var isReview = c.conf < 90;
         return '<div class="clip-queue-item ' + (isSel ? 'selected' : '') + '" onclick="selectApprovalClip(\'' + escapeHtml(c.id) + '\')">' +
-          '<img class="queue-thumb" src="/static/images/thumb_review_1.png" alt="clip" onerror="this.src=\'/static/images/header_lighting_rig.png\'"/>' +
+          '<img class="queue-thumb" src="/api/video/' + encodeURIComponent(c.id) + '/thumbnail" alt="Thumbnail for ' + escapeHtml(c.title) + '" loading="lazy" decoding="async" onerror="this.onerror=null;this.style.visibility=\'hidden\'"/>' +
           '<div style="flex:1;">' +
             '<div style="font-weight:' + (isSel ? '700' : '600') + ';color:#FFF;">' + escapeHtml(c.title) + '</div>' +
             '<div class="section-subtext">' + escapeHtml(c.artist) + ' · ' + escapeHtml(c.venue) + '</div>' +
